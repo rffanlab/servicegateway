@@ -9,7 +9,13 @@ BASE=/srv/e5-apps/servicegateway
 CFG=/etc/servicegateway
 WORK=$(mktemp -d)
 trap 'rm -rf -- "$WORK"' EXIT
-old=$(readlink -f "$BASE/current" || true)
+old=""
+if [[ -L "$BASE/current" ]]; then
+    old=$(readlink -e "$BASE/current") || { echo 'current 是失效链接，先检查旧版本，不继续覆盖'; exit 1; }
+    [[ -d "$old" && "$old" == "$BASE/releases/"* ]] || { echo 'current 不指向受管 release，拒绝接管'; exit 1; }
+elif [[ -e "$BASE/current" ]]; then
+    echo 'current 必须是受管 release 的链接，拒绝覆盖已有目录或文件'; exit 1
+fi
 if [[ ! -f "$CFG/app.env" ]]; then
     install -d -m 0750 "$CFG"
     install -m 0600 "$ROOT/.env.example" "$CFG/app.env"
