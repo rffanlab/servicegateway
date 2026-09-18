@@ -83,7 +83,10 @@ class RouteSpec(Strict):
     path: str = "/"
     strip_prefix: bool = False
     upstreams: list[Upstream] = Field(min_length=1, max_length=16)
-    auth: Literal["session", "api_key", "e5", "public"] = "session"
+    auth: Literal["session", "api_key", "e5", "public", "mtls"] = "session"
+    client_ca: str | None = Field(default=None, pattern=ID)
+    session_users: list[str] = Field(default_factory=list, max_length=200)
+    max_connections: int = Field(16, ge=1, le=1024)
     enabled: bool = True
     websocket: bool = True
     buffering: bool = False
@@ -117,6 +120,12 @@ class RouteSpec(Strict):
 
     @model_validator(mode="after")
     def unique_upstreams(self):
+        if self.auth == "mtls" and (not self.certificate or not self.client_ca):
+            raise ValueError("mTLS requires a server certificate and a client CA identifier")
+        if self.client_ca and self.auth != "mtls":
+            raise ValueError("client_ca is only valid for mTLS routes")
+        if any(not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", u) for u in self.session_users):
+            raise ValueError("Invalid session username")
         if len({x.key() for x in self.upstreams}) != len(self.upstreams):
             raise ValueError("Duplicate upstream")
         return self
@@ -141,8 +150,8 @@ class Snapshot(Strict):
             if key in matches:
                 raise ValueError("Conflicting port/host/path")
             matches.add(key)
-            listener = listeners.setdefault(r.listen_port, r.certificate)
-            if listener != r.certificate:
+            listener = listeners.setdefault(r.listen_port, (r.certificate, r.client_ca))
+            if listener != (r.certificate, r.client_ca):
                 raise ValueError("All routes on a port must use the same TLS certificate")
         return self
 

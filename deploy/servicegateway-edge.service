@@ -8,6 +8,7 @@ Type=forking
 PIDFile=/run/servicegateway-edge/nginx.pid
 RuntimeDirectory=servicegateway-edge
 RuntimeDirectoryMode=0755
+ExecStartPre=/srv/e5-apps/servicegateway/current/.venv/bin/python -I -m servicegateway.recovery
 ExecStartPre=/usr/sbin/nginx -t -c /etc/servicegateway/nginx.conf
 ExecStart=/usr/sbin/nginx -c /etc/servicegateway/nginx.conf
 ExecReload=/usr/sbin/nginx -s reload -c /etc/servicegateway/nginx.conf
@@ -19,7 +20,7 @@ KillMode=mixed
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/run/servicegateway-edge /var/lib/servicegateway/edge /srv/e5-logs/servicegateway
+ReadWritePaths=/etc/servicegateway /run/servicegateway-edge /var/lib/servicegateway/edge /srv/e5-logs/servicegateway
 
 [Install]
 WantedBy=multi-user.target

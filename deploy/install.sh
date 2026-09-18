@@ -3,7 +3,7 @@ set -Eeuo pipefail
 # Run from a reviewed checkout. No curl|bash, package-manager changes or old E5 replacement.
 [[ $EUID -eq 0 ]] || { echo '请用 sudo bash deploy/install.sh'; exit 1; }
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-for bin in python3 nginx systemctl curl ss; do command -v "$bin" >/dev/null || { echo "缺少依赖: $bin"; exit 1; }; done
+for bin in python3 nginx systemctl curl ss busctl; do command -v "$bin" >/dev/null || { echo "缺少依赖: $bin"; exit 1; }; done
 nginx -V 2>&1 | grep -q http_auth_request_module || { echo 'Nginx 缺少 auth_request 模块'; exit 1; }
 BASE=/srv/e5-apps/servicegateway
 CFG=/etc/servicegateway
@@ -13,7 +13,7 @@ old=$(readlink -f "$BASE/current" || true)
 if [[ ! -f "$CFG/app.env" ]]; then
     install -d -m 0750 "$CFG"
     install -m 0600 "$ROOT/.env.example" "$CFG/app.env"
-    echo "已生成 $CFG/app.env。请先配置独立 MySQL 数据库和账号，再重跑。"
+    echo "已生成 $CFG/app.env。请配置独立 MySQL 与 HTTPS 管理域名；先阅读 docs/REMOTE-SECURITY.md。"
     exit 1
 fi
 if grep -q REPLACE_WITH "$CFG/app.env"; then echo '请先配置 app.env 中的 MySQL 凭据'; exit 1; fi
@@ -24,7 +24,20 @@ if [[ -z "$old" ]]; then
 fi
 id servicegateway >/dev/null 2>&1 || useradd --system --home /srv/e5-data/servicegateway --shell /usr/sbin/nologin servicegateway
 install -d -o root -g servicegateway -m 0750 "$CFG"
-for d in /srv/e5-data/servicegateway /srv/e5-workspaces/servicegateway /srv/e5-logs/servicegateway; do install -d -o servicegateway -g servicegateway -m 0750 "$d"; done
+for d in /srv/e5-data/servicegateway /srv/e5-workspaces/servicegateway; do install -d -o servicegateway -g servicegateway -m 0750 "$d"; done
+# Root master must NEVER open logs in an application-writable directory (symlink risk).
+[[ ! -L /srv/e5-logs/servicegateway ]] || { echo '日志目录是符号链接，拒绝部署'; exit 1; }
+install -d -o root -g servicegateway -m 0750 /srv/e5-logs/servicegateway
+for log in edge-access.log edge-error.log; do
+    path="/srv/e5-logs/servicegateway/$log"
+    [[ ! -L "$path" ]] || { echo '日志文件是符号链接，拒绝部署'; exit 1; }
+    if [[ -e "$path" ]]; then
+        [[ -f "$path" && $(stat -c '%h' "$path") == 1 ]] || { echo '日志不是独立普通文件'; exit 1; }
+    fi
+    touch "$path"
+    chown root:servicegateway "$path"
+    chmod 0640 "$path"
+done
 # Nginx's master creates logs; workers need traverse/write access for temp files only.
 install -d -o root -g root -m 0755 /var/lib/servicegateway /var/lib/servicegateway/edge
 install -d -o www-data -g www-data -m 0700 /var/lib/servicegateway/edge/client /var/lib/servicegateway/edge/proxy
@@ -44,7 +57,7 @@ chmod -R go-w "$release"
 # Root-only env files are parsed by systemd, not sourced/evaluated as shell.
 cd "$release"
 set +e
-systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" "$release/.venv/bin/alembic" upgrade head
+systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" "$release/.venv/bin/python" -m servicegateway.preflight --migrate
 migration_rc=$?
 set -e
 [[ $migration_rc -eq 0 ]] || { echo '数据库迁移失败；尚未切换运行版本'; exit 1; }
@@ -87,6 +100,6 @@ systemctl reload nginx.service
 install -o root -g root -m 0644 "$release/deploy/logrotate.conf" /etc/logrotate.d/servicegateway
 bash "$release/deploy/verify.sh"
 trap - ERR
-echo '部署完成。管理入口使用服务器 IP 的 19091 端口。旧 E5 Manager 和业务未迁移。'
+echo '本机组件部署完成；管理入口仅监听 127.0.0.1:19091，未开放公网。请继续 docs/REMOTE-SECURITY.md 验收。'
 echo '创建管理员（交互输入，不在参数中放密码）：'
 echo "sudo systemd-run --quiet --wait --pty --collect -p EnvironmentFile=$CFG/app.env -p WorkingDirectory=$release $release/.venv/bin/sgctl admin rffanlab"

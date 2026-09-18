@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/srv/e5-data/servicegateway /srv/e5-workspaces/servicegateway /srv/e5-logs/servicegateway
+ReadWritePaths=/srv/e5-data/servicegateway /srv/e5-workspaces/servicegateway
 StandardOutput=journal
 StandardError=journal
 

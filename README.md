@@ -1,46 +1,34 @@
 # ServiceGateway
 
-**面向 E5 Linux 主机的服务管理与网关控制台，生产数据库使用 MySQL。**
+**MySQL 驱动的 Linux 服务管理与网关控制台。默认面向远程服务器，安装后不自动开放公网。**
 
-[English](README.en.md) · [E5 部署与迁移](docs/E5-DEPLOYMENT.md) · [架构与边界](docs/ARCHITECTURE.md) · [上线验收](docs/ACCEPTANCE.md)
+[English](README.en.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
 
-这是一个独立的网关管理服务，不是只展示端口链接的导航页。它维护服务登记、网关路由草稿、认证、发布快照、健康状态和审计，并通过单独的 Nginx 实例承载实际业务流量。
+当前为单主机功能版 0.1.0。依据已有 E5 Business Manager 注册合同实现兼容能力，不宣称复制了未提供的 E5 线上源码。代码测试通过不等于目标服务器已部署或通过安全审计。
 
-> 当前版本：0.1.0，单主机功能版。依据已有 E5 Business Manager 接入合同重建兼容能力，不宣称复制了 E5 上未提供的全部源码。上线前必须完成真实 E5 验收；不要直接替换现有 Manager 或业务入口。
+## 功能
 
-## 已实现
-
-| 模块 | 功能 |
+| 模块 | 已实现 |
 |---|---|
-| 中文管理控制台 | 登录、真实运行总览、服务管理、路由表单、发布/回滚、API Key、用户角色、操作审计、访问采样 |
-| 服务管理 | 兼容原服务 manifest；动态登记、幂等更新、导入预览、HTTP 健康检查、systemd 进程状态、启停/重启/自启、仅注销登记 |
-| 网关路由 | 独立端口、精确域名、路径前缀、可选去前缀、多上游权重、轮询/最少连接/IP 绑定、请求大小与空闲超时 |
-| 协议 | HTTP、WebSocket、SSE、流式上传/下载；不在 Python 中转发业务内容 |
-| 安全 | Argon2 密码、HttpOnly 会话、CSRF、三种用户角色、哈希存储的限定作用域 API Key、全局/路由 IP 白名单、每来源 IP 限流 |
-| 统一认证 | 新控制台会话、API Key、旧 E5 登录态、显式公开路由（默认禁止）四种模式 |
-| 发布 | 草稿版本检查、配置预览、结构化白名单复验、nginx -t、原子文件替换、reload、配置指纹与监听检查、失败恢复、历史快照回滚、未决状态核对 |
-| 持久化 | MySQL + SQLAlchemy + Alembic；配置、会话、API Key 哈希、发布、健康快照和审计均入库 |
-| 本机代理 | Unix socket + SO_PEERCRED，root-owned 策略；只操作已批准的明确 unit 与上游，不提供 shell、通配 systemctl 或任意 Nginx 配置 |
-| 运维交付 | 独立 systemd 服务、安装/回退脚本、MySQL 建库模板、日志轮转、CLI 管理员恢复、测试与 CI |
+| 中文控制台 | 登录、服务状态、路由表单、发布与回滚、密钥、用户权限、审计、访问采样 |
+| 服务管理 | 原 manifest 字段兼容、幂等登记、导入预览、HTTP 健康、systemd 状态、启停/重启/自启、仅注销登记 |
+| 网关 | 独立 Nginx 实例；端口/精确域名/路径路由、前缀移除、加权多上游、最少连接、IP 绑定 |
+| 协议 | HTTP、TLS、SSE、WebSocket、流式上传下载；业务流量不经过 Python 转发 |
+| 身份与防护 | Argon2、哈希会话与 API Key、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
+| 发布 | 草稿版本与摘要检查、白名单复验、nginx -t、原子写入、独立发布 generation、落盘中断恢复、历史快照回滚 |
+| 运维 | MySQL + Alembic；非 root 控制台、受限本机 Agent、安装/回退脚本、日志轮转、CLI、CI 与测试 |
 
-## 部署结构
+## 默认安全边界
 
-```text
-浏览器 / API 客户端
-  ├─ 管理入口 :19091 → 127.0.0.1:19092 FastAPI 控制台 → MySQL
-  └─ 业务入口 :19100…19119 → 独立 Nginx edge → 已批准的业务上游
-                              │ auth_request
-                              ├─ ServiceGateway /internal/auth
-                              └─ 旧 E5 Manager :18090 /api/auth/me（e5 模式）
+管理入口 `127.0.0.1:19091`，管理 API `127.0.0.1:19092`，状态端口 `127.0.0.1:19093`。业务 edge 默认也只监听 loopback。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
 
-非 root 控制台 ── Unix socket ── 本机受限 root Agent ── 白名单 systemd / 独立 edge 配置
-```
+远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。对外管理入口模板提供 mTLS、CRL 与来源白名单，仍保留应用密码登录。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
 
-控制台使用单 worker，发布代理使用本机互斥锁。Nginx 数据面与控制面分进程：控制台重启不重启业务应用，但依赖控制台鉴权的新请求在控制台不可用时会拒绝访问，而不是绕过认证。
+Web 用户不能写 root policy、systemd unit、sudoers 或 Nginx 日志目录。服务在目标主机安装并经本机管理员批准后才能登记/控制；不自动继承旧 E5 主机授权。不允许控制网关自身、SSH、MySQL 或系统 Nginx。
 
-## 在 E5 上开始
+## 开始部署
 
-先阅读 [部署文档](docs/E5-DEPLOYMENT.md)。下面命令均为单行，可以逐条复制；不要把占位密码直接投入使用。
+先阅读 [远程安全规范](docs/REMOTE-SECURITY.md)。在远程机独立部署，不先停用 E5。
 
 ```bash
 git clone --branch feat/e5-mysql-gateway https://github.com/rffanlab/servicegateway.git
@@ -50,11 +38,17 @@ git clone --branch feat/e5-mysql-gateway https://github.com/rffanlab/servicegate
 cd servicegateway && sudo bash deploy/install.sh
 ```
 
-首次执行只会生成 `/etc/servicegateway/app.env` 并提示配置数据库；**没有默认管理员口令**。配置独立 MySQL 数据库与账号后重跑安装，再用 CLI 交互创建管理员。部署脚本不安装/升级你的业务程序，不删除原 Manager、旧 Nginx 站点、模型或业务数据。
+首次生成 root-only 环境模板并停止，随后配置独立本机 MySQL `servicegateway` 数据库、实际 HTTPS 管理域名和匹配的 root policy。没有默认管理员口令；CLI 交互创建管理员，不把密码放命令参数。安装器不修改 SSH、防火墙或云安全组，不迁移/删除业务数据。
 
-默认仅允许 `127.0.0.1` 和 `192.168.1.0/24` 访问新控制台；与实际网段不符时，应先在本机审核调整。默认业务端口是新端口范围；真实主机必须先确认无端口冲突。
+**安装成功不代表对外可用。** 证书、受限外部入口、业务审批和外部网络验收必须按部署规范完成；不要为了临时访问关闭 Secure Cookie 或把所有端口开放。
 
-## 开发与测试
+## API 与状态
+
+管理写操作需要会话和 CSRF；敏感操作超过 5 分钟重新验证密码。operator 可启停服务，admin 管理配置与用户。限定服务登记 Key 只能登记指定服务，不能控制启停。登录后 `/api/schema` 提供 OpenAPI JSON。
+
+`POST /api/registry/services` 登记服务；`PUT /api/routes/{id}?revision=N` 只保存草稿；`POST /api/gateway/preview` 后携相同 revision/digest 调用 `/api/gateway/publish`；`/api/gateway/rollback/{id}` 恢复成功快照，不覆盖编辑草稿或业务数据；`/api/gateway/reconcile` 核对未决发布，不盲目重试。
+
+## 测试
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
@@ -64,22 +58,10 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 .venv/bin/pytest -v
 ```
 
-默认 API 测试仅在临时 SQLite 文件执行，以便无数据库的开发机器快速测试；生产配置明确拒绝 SQLite。CI 另用真正的 MySQL 8.4 验证 Alembic 和同一套 API 测试，真实 Nginx 进程验证 HTTP/鉴权、请求透传、SSE 与 WebSocket。测试数据库名限定为 `servicegateway_test`，不允许使用业务数据库。
+本地 API 测试使用临时 SQLite；生产拒绝 SQLite。CI 使用专用 MySQL 8.4 数据库验证迁移及 API，真实 Nginx 验证 HTTP、凭据剥离、SSE、WebSocket 与 TLS/mTLS/CRL。`TEST_MYSQL_URL` 只允许数据库名 `servicegateway_test`，不允许使用业务数据库。
 
-## API 要点
+## 边界
 
-所有管理写操作需要管理员会话和 `X-CSRF-Token`；operator 可执行服务生命周期操作。浏览器登录后可在 `/api/schema` 查看完整 OpenAPI JSON。
+单主机、单控制面 worker；不包含分布式高可用、自动 ACME、OIDC、WAF、模型计费、GPU 任务配额、远程 SSH 命令执行或旧环境变量管理的自动迁移。上游只接受批准的 IPv4 HTTP 地址；远端上游需走受控专网/加密隧道，不应通过公网明文转发。
 
-- `POST /api/registry/services`：原 manifest 形状，新增登记必须已有本机批准。可使用限定 `service_ids` 的 `X-Gateway-Key`，但这类 Key 不能启停服务。
-- `PUT /api/routes/{id}?revision=N`：保存路由草稿；不会直接改变线上流量。
-- `POST /api/gateway/preview` → `POST /api/gateway/publish`：预览后携带相同 `revision`、`digest` 发布。
-- `POST /api/gateway/rollback/{release_id}`：恢复成功历史网关快照，不覆盖编辑草稿或业务数据库。
-- `POST /api/gateway/reconcile`：核对崩溃/超时后的未决发布；不盲目重复发布。
-
-旧 Manager 的 `X-E5-Confirm` 本机免登录例外**不在新 API 中默认开启**；请迁移为管理员会话或限定注册 Key。既有 E5 网关仍可继续使用旧登录态，迁移期无需停用旧平台。
-
-## 当前明确不包含
-
-多主机 Agent 编排、分布式高可用、自动 ACME 签发续期、WAF、OpenAI 模型计费/配额、GPU 任务排队、任意 Docker socket 控制、业务部署脚本在线编辑、旧 Manager 环境变量管理/日志清理的自动迁移。TLS 使用本机管理员安装的固定证书目录；HTTP 上游目前仅接受批准的 IPv4 字面量地址。
-
-访问采样只显示最近完成请求，不是完整时序监控；长连接结束后才记访问日志。API Key 撤销和退出登录不会强制断开已经建立的 WebSocket/SSE。路径代理不能自动修复所有应用的绝对路径、Cookie Path 或重定向；不支持子路径的服务应优先使用独立端口或域名。
+访问采样不是全量时序监控。撤销 Key/证书或退出登录不会强制断开已建立的长连接。路径代理不自动修复应用的绝对 URL、Cookie Path 和重定向。依赖尚未完整哈希锁定，公网生产前需要固定版本、漏洞扫描、备份恢复和真实主机验收。

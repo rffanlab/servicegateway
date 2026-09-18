@@ -25,6 +25,8 @@ class LoginSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     csrf: Mapped[str] = mapped_column(String(64))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, default=now)
+    reauthenticated_at: Mapped[datetime | None] = mapped_column(DateTime, default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 

@@ -29,7 +29,7 @@ PROTECTED = {"servicegateway.service", "servicegateway-agent.service", "serviceg
 def root_file(path):
     path = Path(path)
     s = path.lstat()
-    if not stat.S_ISREG(s.st_mode) or s.st_uid != 0 or s.st_mode & 0o022:
+    if not stat.S_ISREG(s.st_mode) or s.st_uid != 0 or s.st_mode & 0o022 or s.st_nlink != 1:
         raise ValueError(f"Not a root-owned immutable regular file: {path}")
     for parent in path.parents:
         st = parent.lstat()
@@ -41,18 +41,22 @@ def root_file(path):
 def command(args, timeout=25):
     p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"})
     if p.returncode:
-        raise ValueError(f"{Path(args[0]).name} failed: {(p.stderr or p.stdout)[-400:]}")
+        raise ValueError(f"{Path(args[0]).name} failed (exit {p.returncode}); inspect the local service journal")
     return p.stdout
 
 
 def unit_info(unit):
     if unit in PROTECTED:
         raise ValueError("Gateway, database, SSH and system Nginx units cannot be controlled")
-    raw = command(["/usr/bin/systemctl", "show", unit, "--property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,FragmentPath,User"])
+    raw = command(["/usr/bin/systemctl", "show", unit, "--property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,FragmentPath,User,DropInPaths"])
     info = dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
     if info.get("LoadState") != "loaded" or info.get("FragmentPath") != f"/etc/systemd/system/{unit}":
         raise ValueError("Unit must be installed directly in /etc/systemd/system")
+    if info.get("Id") != unit:
+        raise ValueError("Unit aliases are not accepted")
     root_file(info["FragmentPath"])
+    for dropin in info.get("DropInPaths", "").split():
+        root_file(dropin)
     if info.get("User", "") in ("", "root", "0"):
         raise ValueError("Managed services must run as an explicit non-root user")
     return {"unit": unit, "active": info.get("ActiveState", "unknown"), "sub": info.get("SubState", "unknown"), "startup": info.get("UnitFileState", "unknown"), "pid": int(info.get("MainPID", "0"))}
@@ -67,10 +71,15 @@ def load_policy(settings):
     ports = policy["listen_ports"]
     if any(type(p) is not int or not 1024 <= p <= 65535 or p in (18090, 19091, 19092, 19093) for p in ports):
         raise ValueError("Invalid/reserved listener port")
+    if policy.get("remote_mode", True):
+        if policy.get("allow_public") or policy.get("include_legacy_registry"):
+            raise ValueError("Remote policy forbids public auth and implicit legacy root grants")
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", policy.get("management_host", "")):
+            raise ValueError("Remote policy requires an exact management_host")
     policy.setdefault("services", {})
     policy["legacy_manifests"] = []
     legacy = Path("/etc/e5-business-manager/assets.d")
-    if legacy.exists():
+    if policy.get("include_legacy_registry", False) and legacy.exists():
         for path in sorted(legacy.glob("*.json"))[:200]:
             try:
                 raw = json.loads(root_file(path).read_text())
@@ -92,6 +101,12 @@ def validate_service(spec, policy, inspect_units=True):
     address, port = endpoint(spec.health_url)
     if f"{address}:{port}" not in grant["upstreams"]:
         raise ValueError("Health target is not approved")
+    # Reject metadata, unspecified, multicast, link-local and control-plane endpoints,
+    # even if a malformed policy accidentally listed one.
+    ip = ipaddress.ip_address(address)
+    if ip.is_link_local or ip.is_unspecified or ip.is_multicast or f"{address}:{port}" in {
+            "127.0.0.1:18090", "127.0.0.1:19091", "127.0.0.1:19092", "127.0.0.1:19093"}:
+        raise ValueError("Sensitive health target is forbidden")
     if inspect_units:
         for unit in spec.services:
             unit_info(unit)
@@ -101,8 +116,21 @@ def validate_snapshot(snapshot, policy, inspect_units=True):
     for service in snapshot.services:
         validate_service(service, policy, inspect_units)
     for route in snapshot.routes:
+        if policy.get("remote_mode", True):
+            if route.auth not in ("api_key", "mtls") or not route.certificate or route.host == "_":
+                raise ValueError("Remote routes require exact host, TLS and API key or mTLS; no legacy/shared admin session")
+            if route.host == policy.get("management_host"):
+                raise ValueError("Business routes must not use the management hostname")
+            if route.rate_per_second < 1:
+                raise ValueError("Remote routes must configure a positive rate limit")
         if route.listen_port not in policy["listen_ports"]:
             raise ValueError(f"Listener port not approved: {route.listen_port}")
+        for upstream in route.upstreams:
+            ip = ipaddress.ip_address(upstream.address)
+            if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
+                raise ValueError("Metadata, link-local and special upstreams are forbidden")
+            if ip.is_loopback and upstream.port in (18090, 19091, 19092, 19093):
+                raise ValueError("Control-plane upstreams are forbidden")
         allowed = policy["services"][route.service_id]["upstreams"]
         if any(up.key() not in allowed for up in route.upstreams):
             raise ValueError(f"Unapproved upstream for {route.id}")
@@ -111,9 +139,18 @@ def validate_snapshot(snapshot, policy, inspect_units=True):
         networks = [ipaddress.IPv4Network(x) for x in policy["allowed_cidrs"]]
         if any(not any(ipaddress.IPv4Network(cidr).subnet_of(n) for n in networks) for cidr in route.allow_cidrs):
             raise ValueError("Route CIDRs cannot broaden the root policy")
+        if route.client_ca and inspect_units:
+            root_file(CERTS / route.client_ca / "ca.pem")
+            root_file(CERTS / route.client_ca / "crl.pem")
+            root_file(CERTS / route.client_ca / "probe.crt")
+            key = root_file(CERTS / route.client_ca / "probe.key")
+            if key.stat().st_mode & 0o077:
+                raise ValueError("Probe private key must be mode 0600")
         if route.certificate and inspect_units:
             root_file(CERTS / route.certificate / "fullchain.pem")
-            root_file(CERTS / route.certificate / "privkey.pem")
+            key = root_file(CERTS / route.certificate / "privkey.pem")
+            if key.stat().st_mode & 0o077:
+                raise ValueError("Server private key must be mode 0600")
 
 
 def atomic_write(path, data, mode=0o600):
@@ -141,15 +178,32 @@ class Broker:
         self.lock = threading.RLock()
         self.opener = build_opener(ProxyHandler({}))
 
-    def live_digest(self):
+    def live_identity(self):
         try:
             with self.opener.open("http://127.0.0.1:19093/_sg/ready", timeout=2) as response:
                 result = response.read(100).decode()
-                return result if re.fullmatch(r"[0-9a-f]{64}", result) else None
+                return {"digest": result, "generation": response.headers.get("X-SG-Generation")} if re.fullmatch(r"[0-9a-f]{64}", result) else {}
         except (OSError, URLError):
-            return None
+            return {}
 
-    def check_listeners(self, snapshot, digest):
+    def live_digest(self):
+        return self.live_identity().get("digest")
+
+    def recover_interrupted(self):
+        from . import recovery
+        with self.lock:
+            record = recovery.restore_disk()
+            if not record:
+                return
+            command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
+            for _ in range(40):
+                if self.live_identity() == record:
+                    recovery.finish()
+                    return
+                time.sleep(.25)
+            raise ValueError("Interrupted publish restoration is unverified; keeping journal")
+
+    def check_listeners(self, snapshot, digest, generation=None):
         import http.client
         import ssl
         seen = set()
@@ -159,11 +213,14 @@ class Broker:
                 continue
             seen.add(key)
             # Loopback-only readiness probe; verifies config identity, not PKI trust.
-            conn = http.client.HTTPSConnection("127.0.0.1", r.listen_port, timeout=1, context=ssl._create_unverified_context()) if r.certificate else http.client.HTTPConnection("127.0.0.1", r.listen_port, timeout=1)
+            ctx = ssl._create_unverified_context()
+            if r.client_ca:
+                ctx.load_cert_chain(str(CERTS / r.client_ca / "probe.crt"), str(CERTS / r.client_ca / "probe.key"))
+            conn = http.client.HTTPSConnection("127.0.0.1", r.listen_port, timeout=1, context=ctx) if r.certificate else http.client.HTTPConnection("127.0.0.1", r.listen_port, timeout=1)
             try:
                 conn.request("GET", "/_sg/ready", headers={"Host": r.host if r.host != "_" else "localhost"})
                 resp = conn.getresponse()
-                if resp.status != 200 or resp.read(100).decode() != digest:
+                if resp.status != 200 or resp.read(100).decode() != digest or (generation and resp.getheader("X-SG-Generation") != generation):
                     return False
             except (OSError, http.client.HTTPException):
                 return False
@@ -171,16 +228,19 @@ class Broker:
                 conn.close()
         return True
 
-    def apply(self, snapshot, expected):
+    def apply(self, snapshot, expected, generation):
         with self.lock:
             policy = load_policy(self.settings)
             validate_snapshot(snapshot, policy)
-            current = self.live_digest()
+            identity = self.live_identity()
+            current = identity.get("digest")
             if current != expected:
                 raise ValueError("Live configuration changed or edge is down; reconcile before publishing")
             target = snapshot.digest()
             secret = self.settings.auth_secret()
-            config = render(snapshot, policy, target, secret, self.settings.admin_port)
+            if not re.fullmatch(r"[0-9a-f]{32}", generation):
+                raise ValueError("Invalid release generation")
+            config = render(snapshot, policy, target, secret, self.settings.admin_port, generation)
             old = root_file(CONFIG).read_text()
             candidate = CONFIG.with_name("candidate.conf")
             atomic_write(candidate, config)
@@ -188,45 +248,41 @@ class Broker:
                 command(["/usr/sbin/nginx", "-t", "-c", str(candidate)])
             finally:
                 candidate.unlink(missing_ok=True)
-            if current == target and self.check_listeners(snapshot, target):
-                return {"digest": target, "changed": False}
+            from . import recovery
+            recovery.begin(old, current, identity.get("generation"))
             atomic_write(CONFIG, config)
             try:
                 command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
                 for _ in range(20):
-                    if self.live_digest() == target and self.check_listeners(snapshot, target):
+                    if self.live_identity() == {"digest": target, "generation": generation} and self.check_listeners(snapshot, target, generation):
+                        recovery.finish()
                         return {"digest": target, "changed": True}
                     time.sleep(0.25)
                 raise ValueError("New listeners/config fingerprint did not become ready")
             except Exception as exc:
-                atomic_write(CONFIG, old)
                 try:
-                    command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
-                    for _ in range(20):
-                        if self.live_digest() == current:
-                            raise RuntimeError("ROLLBACK_OK")
-                        time.sleep(0.25)
-                    raise ValueError("Rollback readiness timed out")
-                except RuntimeError as result:
-                    if str(result) == "ROLLBACK_OK":
-                        raise ValueError(f"Publish failed; previous config restored: {type(exc).__name__}") from exc
-                    raise
+                    self.recover_interrupted()
                 except Exception as rollback:
-                    raise ValueError("Publish and rollback verification failed; inspect edge locally") from rollback
+                    raise ValueError("Publish and rollback verification failed; journal retained for local recovery") from rollback
+                raise ValueError("Publish failed; previous configuration restored") from exc
 
     def dispatch(self, req):
         action = req.get("action")
-        allowed = {"status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected"}, "service": {"action", "spec", "operation"}}
+        allowed = {"status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
         if action not in allowed or set(req) - allowed[action]:
             raise ValueError("Unsupported agent request")
         if action == "status":
-            value = self.live_digest()
-            return {"running": bool(value), "digest": value}
+            from . import recovery
+            with self.lock:
+                if recovery.pending():
+                    raise ValueError("Publish recovery is pending; do not reconcile against an intermediate state")
+                identity = self.live_identity()
+                return {"running": bool(identity), "digest": identity.get("digest"), "generation": identity.get("generation")}
         if action == "traffic":
             path = Path("/srv/e5-logs/servicegateway/edge-access.log")
             if not path.exists():
                 return {"sample": [], "sampled_bytes": 0}
-            with path.open("rb") as stream:
+            with root_file(path).open("rb") as stream:
                 size = stream.seek(0, 2)
                 stream.seek(max(0, size - 262144))
                 raw = stream.read(262144)
@@ -244,7 +300,7 @@ class Broker:
         if action in ("validate", "apply"):
             snap = Snapshot.model_validate(req["snapshot"])
             if action == "apply":
-                return self.apply(snap, req["expected"])
+                return self.apply(snap, req["expected"], req["generation"])
             validate_snapshot(snap, policy)
             return {"digest": snap.digest(), "config": render(snap, policy, snap.digest(), "REDACTED", self.settings.admin_port)}
         spec = ServiceSpec.model_validate(req["spec"])
@@ -259,7 +315,18 @@ class Broker:
             if operation in ("start", "restart", "enable", "disable"):
                 verb = "start" if operation == "restart" else operation
                 for unit in spec.services:
-                    command(["/usr/bin/systemctl", verb, unit])
+                    if verb in ("enable", "disable"):
+                        # systemctl enable would write from this sandbox. PID1 owns this action.
+                        method = "EnableUnitFiles" if verb == "enable" else "DisableUnitFiles"
+                        args = ["/usr/bin/busctl", "call", "org.freedesktop.systemd1",
+                                "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", method,
+                                "asbb" if verb == "enable" else "asb", "1", unit, "false"]
+                        if verb == "enable":
+                            args.append("false")
+                        command(args)
+                        command(["/usr/bin/systemctl", "daemon-reload"])
+                    else:
+                        command(["/usr/bin/systemctl", verb, unit])
             units = [unit_info(unit) for unit in spec.services]
         active = [x["active"] == "active" for x in units]
         enabled = [x["startup"] == "enabled" for x in units]
@@ -272,6 +339,26 @@ class Broker:
 class Server(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
     request_queue_size = 32
+
+    def __init__(self, *args, **kwargs):
+        self.capacity = threading.BoundedSemaphore(16)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self.capacity.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.capacity.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.capacity.release()
 
 
 class Handler(socketserver.StreamRequestHandler):
@@ -311,6 +398,7 @@ def main():
         os.chmod(path, 0o660)
         server.allowed_uid = account.pw_uid
         server.broker = Broker(settings)
+        server.broker.recover_interrupted()
         server.serve_forever()
 
 

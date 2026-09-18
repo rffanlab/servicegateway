@@ -1,43 +1,35 @@
 # 架构、状态与安全边界
 
+远程部署要求以 [REMOTE-SECURITY.md](REMOTE-SECURITY.md) 为准。
+
 ## 三层职责
 
-控制面负责 MySQL 状态、用户登录/权限、服务登记、路由草稿、发布和审计。浏览器只访问控制面 API。数据面是独立 Nginx 实例，直接连接业务上游，承载 HTTP/WebSocket/SSE/大文件。root Agent 是受限本机执行器，不接收远程 TCP，不提供 shell，仅对明确批准的服务和网关配置操作。
+控制面负责 MySQL 状态、身份、服务登记、路由草稿、发布与审计。独立 Nginx 数据面直接连接业务上游，承载 HTTP/TLS/WebSocket/SSE，不让 Python 转发业务内容。root Agent 只有本机 Unix socket，验证对端 UID，只执行已批准的结构化操作。
 
-数据库不是 root 授权源。即使管理账号被滥用，也不能通过修改数据库添加未获本机批准的 unit/上游/端口。Agent 每次读取 root-owned policy 与旧 E5 root-owned 注册文件，独立校验安装位置、用户和结构化配置。此边界不把已经由 root 批准的业务 unit 视为不可信任意代码；root 批准前必须审核 unit、drop-in 和程序目录权限。
+数据库不是 root 授权源。管理员账户不能仅靠修改数据库获得未批准的 unit/上游/端口权限。root policy 和 unit/drop-in 必须不可被业务账户写入。root 批准前仍需人工审核业务程序、依赖和目录权限；本系统不是任意不可信代码的沙箱。
 
-## MySQL 表
+## MySQL
 
-`users` 保存密码哈希与角色；`login_sessions` 保存会话哈希、CSRF 与到期时间；`api_keys` 保存令牌哈希、范围、失效时间和撤销状态；`services` 与 `routes` 保存规范化 JSON 草稿；`gateway_state` 保存全局草稿版本及 active/pending release；`releases` 保存不可变配置快照、摘要和发布结果；`health` 保存最近健康状态；`audit` 保存控制操作记录。
+users 保存密码哈希和角色；login_sessions 保存会话哈希、CSRF、绝对期限、最近活动和重验时间；api_keys 保存令牌哈希、范围和撤销状态；services/routes 是配置草稿；gateway_state 保存草稿版本及 active/pending；releases 保存快照与状态；health 保存最近健康检查；audit 保存控制操作记录。
 
-关系数据采用外键和唯一约束。会话/Key 明文不入库。Alembic 0001 冻结初始建表语句，应用启动不自动建表。Web API 不提供审计删除接口；具有数据库管理员权限的人仍能修改表，当前版本不宣称密码学防篡改。
+Alembic 管理迁移，应用启动不自动建表。0002 使旧会话重新登录。不存在通过 Web 清库、删除业务数据或删除审计的 API；数据库管理员仍能修改表，当前不声称审计具有密码学防篡改能力。
 
-## 发布状态机
+## 发布状态
 
-```text
-草稿 revision=N
-   ↓ 预览：snapshot + digest
-校验相同 revision/digest
-   ↓ MySQL 提交 pending
-Agent 复验 root policy → nginx -t → 原子写配置 → reload
-   ↓ 各监听入口与本机状态端口返回目标 digest
-核对实际 digest → active / failed / 保持 pending 等待人工核对
-```
+预览取得 revision/digest → 校验一致性 → MySQL 写 pending release → Agent 复验 root policy → nginx -t → 落盘旧配置和 pending journal → 原子替换 → reload → 检查配置摘要和唯一 release generation → 确认 active/failed，或保留未决记录。
 
-配置摘要用于内容一致性，不是身份凭据。用 MySQL pending 记录先于主机变更，避免主机变更完成但数据库没有恢复线索。reload 返回码本身不能证明新监听已生效，因此另做配置指纹与监听检查。失败不能确认时不宣称回滚成功。
+单看 reload 返回码或相同配置摘要不足以证明新 worker 已加载。每次发布使用唯一 generation，同配置证书更新也必须确认该轮加载。中断恢复由 root 落盘记录和 MySQL 状态共同核对；无法确认时拒绝盲目重试。edge 启动前恢复未完成 candidate，防止重启意外上线半成品。
 
-控制面必须单 worker 运行；本地 Agent 使用互斥锁串行控制。当前不是分布式事务或多节点控制器。旧长连接在 Nginx graceful reload 后可继续由旧 worker 服务，不会因保存草稿而重建连接。连接中的鉴权不持续重复执行，撤销 Key 仅保证后续新请求被拒绝。
+历史回滚只改变网关快照，不回退业务程序/数据库、不覆盖编辑草稿。服务注销不删除 unit、模型、音视频或工作区。多 unit 正序启动、逆序停止，restart 为逆序 stop 后正序 start；disable 不停止当前进程。
 
-## 安全默认值
+## 身份和网络
 
-默认私有网段访问、会话鉴权、禁止 public route、不允许 DNS 解析任意上游、不允许用户输入 raw Nginx 指令、不允许远端控制任意 unit。API 不接受业务环境文件路径、数据库密码或任意命令。root policy 文件不能被 Web 服务写入。
+默认所有网关内部组件与 edge 绑定 loopback。远程模式管理域名与业务域名分离，使用 Secure host-only 管理 Cookie。远程业务路由使用 API Key 或 mTLS，旧 E5 会话兼容仅在显式 LAN 策略下启用。网关不把管理 Cookie/内部凭据转发给业务。
 
-会话 Cookie 是 HttpOnly + SameSite Strict；更改接口验证 CSRF。登录有控制面有界限速和控制台 Nginx 的来源 IP 限速。API Key 使用独立 `X-Gateway-Key`，不占用业务的 `Authorization`。上游不应收到网关自己的管理令牌。新网关与旧 E5 会话是不同认证系统，迁移期可按路由选择旧 E5 auth_request。
+鉴权请求携配置摘要，旧 worker 不能使用新版本较弱的授权规则。管理 API/数据库不可用时，依赖这些组件鉴权的新请求失败关闭；mTLS 在 Nginx 层验证。已建立长连接不会持续重新鉴权，凭据撤销不自动断开连接。
 
-不建议把同一宿主域的任意第三方应用与管理 Cookie 混在一起；Cookie 不按端口隔离。不同信任等级的业务必须使用隔离域名，控制台 Cookie 默认不共享父域。不能仅靠端口不同把不可信第三方应用变成安全租户隔离。
+## 范围
 
-## 明确边界
+单主机、单控制面 worker，Agent 串行发布；不是分布式事务或多节点控制器。健康轮询不自动摘除上游，负载均衡使用 Nginx 被动失败检测。访问采样不是全量时序监控。业务自己的权限、CSRF、任务配额和文件安全仍需独立保证。
 
-本版本没有完整多租户、WAF、主动熔断器、分布式限流、全量时序指标和业务访问历史检索。Nginx 使用被动上游失败检测；HTTP 健康轮询显示健康度，不会主动摘除业务实例，避免轻率探测造成误切换。远程上游只做流量代理，不提供远程 systemd 生命周期管理。
-
-生产证书、管理员恢复凭据、MySQL 备份与主机级防火墙由部署者负责。控制台/数据库故障时新鉴权请求会失败关闭；继续开放旧鉴权缓存并非默认行为。MySQL 与 Agent 的不可用状态不应显示为“所有业务停止”。
+证书生命周期、备份恢复、依赖锁定/扫描、云安全组与主机防火墙由目标环境验收。测试不能代替现场配置检查或独立渗透测试。

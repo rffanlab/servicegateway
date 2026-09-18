@@ -29,6 +29,10 @@ class LoginBody(Strict):
     password: str = Field(min_length=1, max_length=256)
 
 
+class ReauthBody(Strict):
+    password: str = Field(min_length=1, max_length=256)
+
+
 class UserBody(LoginBody):
     role: str = Field(default="viewer", pattern=r"^(admin|operator|viewer)$")
 
@@ -68,13 +72,19 @@ def create_app(settings=None, agent=None):
     def check_health(spec):
         try:
             data = agent.call("service", spec=spec, operation="status")
+        except AgentError as exc:
+            data = {"state": "unknown", "startup": "unknown", "units": [], "detail": type(exc).__name__}
+        try:
+            # Validate every health target through the root broker first; no arbitrary DB URL fetch.
+            if data["state"] == "unknown":
+                raise AgentError("Target has not been approved")
             started = time.monotonic()
             with httpx.Client(timeout=3, follow_redirects=False, trust_env=False) as client:
                 with client.stream("GET", spec["health_url"]) as resp:
                     healthy = resp.status_code == 200
             data.update(healthy=healthy, latency_ms=int((time.monotonic() - started) * 1000), detail="" if healthy else "健康接口未返回 200")
         except Exception as exc:
-            data = {"state": "unknown", "startup": "unknown", "units": [], "healthy": None, "latency_ms": None, "detail": type(exc).__name__}
+            data.update(healthy=False if data["state"] != "unknown" else None, latency_ms=None, detail=type(exc).__name__)
         with sessions.begin() as db:
             health = db.get(Health, spec["id"])
             if not health:
@@ -91,10 +101,11 @@ def create_app(settings=None, agent=None):
             if not state.pending_release:
                 return
             pending = db.get(Release, state.pending_release)
-            live = agent.call("status")["digest"]
+            identity = agent.call("status")
+            live = identity["digest"]
             active = db.get(Release, state.active_release) if state.active_release else None
             baseline = active.digest if active else Snapshot().digest()
-            if live == pending.digest:
+            if live == pending.digest and identity.get("generation") == pending.id:
                 if active:
                     active.status = "superseded"
                 state.active_release = pending.id
@@ -144,6 +155,9 @@ def create_app(settings=None, agent=None):
 
     app = FastAPI(title="ServiceGateway", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.engine, app.state.sessions, app.state.agent = engine, sessions, agent
+    app.state.settings = settings
+    from .boundary import install_boundary
+    install_boundary(app, settings)
 
     @app.middleware("http")
     async def security_headers(request, call_next):
@@ -186,13 +200,26 @@ def create_app(settings=None, agent=None):
                 db.commit()
                 raise HTTPException(401, "用户名或密码错误")
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            old = request.cookies.get("sg_session")
+            old = request.cookies.get(settings.cookie_name)
             if old:
                 db.execute(delete(LoginSession).where(LoginSession.token_hash == digest(old)))
             db.add(LoginSession(token_hash=digest(token), user_id=user.id, csrf=csrf, expires_at=now() + timedelta(hours=settings.session_hours)))
             audit(db, user.username, "login", "session")
-            response.set_cookie("sg_session", token, max_age=settings.session_hours * 3600, httponly=True, secure=settings.secure_cookie, samesite="strict", path="/", domain=settings.cookie_domain)
+            response.set_cookie(settings.cookie_name, token, max_age=settings.session_hours * 3600, httponly=True, secure=settings.secure_cookie, samesite="strict", path="/", domain=settings.cookie_domain)
             return {"username": user.username, "role": user.role, "csrf": csrf}
+
+    @app.post("/api/auth/reauth")
+    def reauth(body: ReauthBody, request: Request):
+        with sessions.begin() as db:
+            user, session = principal(request, db)
+            limiter.check("reauth:" + str(user.id))
+            if not verify(body.password, user.password_hash):
+                audit(db, user.username, "session.reauth", "session", "failed")
+                db.commit()
+                raise HTTPException(401, "密码校验失败")
+            session.reauthenticated_at = now()
+            audit(db, user.username, "session.reauth", "session")
+            return {"ok": True}
 
     @app.get("/api/auth/me")
     def me(request: Request):
@@ -206,7 +233,7 @@ def create_app(settings=None, agent=None):
             user, session = principal(request, db)
             db.delete(session)
             audit(db, user.username, "logout", "session")
-        response.delete_cookie("sg_session", path="/", domain=settings.cookie_domain)
+        response.delete_cookie(settings.cookie_name, path="/", domain=settings.cookie_domain)
         return {"ok": True}
 
     @app.get("/api/schema")
@@ -262,6 +289,8 @@ def create_app(settings=None, agent=None):
         with sessions.begin() as db:
             actor = principal(request, db, "admin")[0].username
             state = state_lock(db)
+            if state.pending_release:
+                raise HTTPException(409, "请先核对未决发布，再注销服务")
             if db.scalar(select(Route).where(Route.service_id == service_id).limit(1)):
                 raise HTTPException(409, "请先删除引用此服务的草稿路由，并发布变更")
             active = db.get(Release, state.active_release) if state.active_release else None
@@ -418,7 +447,7 @@ def create_app(settings=None, agent=None):
                 audit(db, actor, "release.rollback" if source else "release.publish", release_id, "started")
             error = ""
             try:
-                result = agent.call("apply", snapshot=snap.model_dump(), expected=expected)
+                result = agent.call("apply", snapshot=snap.model_dump(), expected=expected, generation=release_id)
                 if result["digest"] != snap.digest():
                     raise AgentError("Agent returned an unexpected digest")
             except AgentError as exc:
@@ -566,11 +595,20 @@ def create_app(settings=None, agent=None):
             release = db.get(Release, state.active_release) if state.active_release else None
             if not release:
                 raise HTTPException(401, "No active release")
+            live_digest = request.headers.get("X-SG-Digest", "")
+            if live_digest and live_digest != release.digest:
+                # Never evaluate an old worker using a new (possibly weaker) route policy.
+                # Short fail-closed window across publication is preferable to an auth downgrade.
+                raise HTTPException(403, "Stale gateway configuration")
+            if settings.deployment_mode == "remote" and not live_digest:
+                raise HTTPException(403, "Missing configuration identity")
             route = next((r for r in release.snapshot["routes"] if r["id"] == rid and r["enabled"]), None)
             if not route:
                 raise HTTPException(403, "Route is not published")
             if route["auth"] == "session":
-                principal(request, db, csrf=False)
+                user, _ = principal(request, db, csrf=False)
+                if user.role != "admin" and user.username not in route.get("session_users", []):
+                    raise HTTPException(403, "User is not permitted on this service")
             elif route["auth"] == "api_key":
                 key = api_key(request, db)
                 if not key or rid not in key.route_ids:

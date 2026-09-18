@@ -13,12 +13,13 @@ from servicegateway.security import ph
 PASSWORD = 'A-test-password-only-12'
 SECRET = 'a' * 64
 SPEC = {'id':'demo', 'name':'Demo', 'description':'Test service', 'services':['demo.service'], 'url':'http://127.0.0.1:19100', 'port':19100, 'health_url':'http://127.0.0.1:18188/healthz', 'gpu':'CPU / API', 'accent':'cyan', 'warning':'Test warning'}
-POLICY = {'listen_address':'127.0.0.1', 'listen_ports':[19100,19101], 'allowed_cidrs':['127.0.0.1/32'], 'allow_public':False, 'services':{'demo':{'units':['demo.service'], 'upstreams':['127.0.0.1:18188'], 'health_url':SPEC['health_url']}}}
+POLICY = {'remote_mode':False, 'listen_address':'127.0.0.1', 'listen_ports':[19100,19101], 'allowed_cidrs':['127.0.0.1/32'], 'allow_public':False, 'services':{'demo':{'units':['demo.service'], 'upstreams':['127.0.0.1:18188'], 'health_url':SPEC['health_url']}}}
 
 
 class FakeAgent:
     def __init__(self):
         self.digest = Snapshot().digest()
+        self.generation = self.digest
         self.calls = []
         self.fail_apply = False
 
@@ -30,7 +31,7 @@ class FakeAgent:
                 raise AgentError('Unapproved service')
             return {'state':'running','startup':'enabled','units':[{'unit':'demo.service','active':'active','startup':'enabled','pid':123}]}
         if action == 'status':
-            return {'running':True,'digest':self.digest}
+            return {'running':True,'digest':self.digest,'generation':self.generation}
         if action == 'inventory':
             return {'manifests':[SPEC], 'grants':POLICY['services'], 'listen_ports':POLICY['listen_ports']}
         if action in ('validate','apply'):
@@ -43,6 +44,7 @@ class FakeAgent:
                 if payload['expected'] != self.digest or self.fail_apply:
                     raise AgentError('Simulated publish failure; original edge unchanged')
                 self.digest = snap.digest()
+                self.generation = payload["generation"]
             return {'digest':snap.digest(),'config':'# REDACTED validated config'}
         if action == 'traffic':
             return {'sample':[], 'sampled_bytes':0}
@@ -56,7 +58,7 @@ def env(tmp_path):
         pytest.fail('Refusing destructive tests on any database except servicegateway_test')
     secret = tmp_path / 'auth-secret'
     secret.write_text(SECRET)
-    settings = Settings(testing=True, database_url=url or f'sqlite:///{tmp_path}/test.db', secure_cookie=False, monitor_enabled=False, auth_secret_file=str(secret), _env_file=None)
+    settings = Settings(testing=True, deployment_mode="lan", database_url=url or f'sqlite:///{tmp_path}/test.db', secure_cookie=False, monitor_enabled=False, auth_secret_file=str(secret), _env_file=None)
     agent = FakeAgent()
     app = create_app(settings, agent)
     Base.metadata.drop_all(app.state.engine)

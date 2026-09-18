@@ -1,0 +1,58 @@
+# Manually reviewed external entry; install only after VPN/SSH and a recovery console work.
+# Replace admin.example.invalid and 192.0.2.10/32. No script opens firewall ports.
+# Do NOT publish the bootstrap :19091 or backend :19092 on a public interface.
+limit_req_zone $binary_remote_addr zone=sg_admin_tls_login:1m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=sg_admin_tls_api:1m rate=10r/s;
+limit_conn_zone $binary_remote_addr zone=sg_admin_tls_conn:1m;
+server {
+    listen 443 ssl;
+    server_name admin.example.invalid;
+    if ($host != admin.example.invalid) { return 421; }
+    ssl_certificate /etc/servicegateway/certs/admin/fullchain.pem;
+    ssl_certificate_key /etc/servicegateway/certs/admin/privkey.pem;
+    ssl_client_certificate /etc/servicegateway/certs/admin-ca/ca.pem;
+    ssl_crl /etc/servicegateway/certs/admin-ca/crl.pem;
+    ssl_verify_client on;
+    ssl_verify_depth 2;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache off;
+    ssl_session_tickets off;
+    allow 127.0.0.1;
+    allow 192.0.2.10/32;
+    deny all;
+    client_max_body_size 2m;
+    client_header_timeout 15s;
+    client_body_timeout 15s;
+    keepalive_timeout 30;
+    limit_conn sg_admin_tls_conn 16;
+    limit_conn_status 429;
+    add_header Strict-Transport-Security 'max-age=31536000' always;
+    # Do not inherit a log_format containing credential-bearing query strings.
+    access_log off;
+    error_log /var/log/nginx/servicegateway-admin-error.log crit;
+    location ^~ /internal/ { return 404; }
+    location = /api/auth/login {
+        limit_req zone=sg_admin_tls_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:19092;
+        proxy_set_header Host admin.example.invalid;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Forwarded '';
+        proxy_set_header Connection '';
+    }
+    location / {
+        limit_req zone=sg_admin_tls_api burst=20 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:19092;
+        proxy_http_version 1.1;
+        proxy_set_header Host admin.example.invalid;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Forwarded '';
+        proxy_set_header Connection '';
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 120s;
+        proxy_buffering off;
+    }
+}
