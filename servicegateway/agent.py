@@ -198,6 +198,11 @@ class Broker:
     def recover_interrupted(self):
         from . import recovery
         with self.lock:
+            from . import certificates
+            if certificates.restore_files():
+                command(["/usr/sbin/nginx", "-t", "-c", str(CONFIG)])
+                command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
+                certificates.finish()
             record = recovery.restore_disk()
             if not record:
                 return
@@ -226,6 +231,9 @@ class Broker:
 
     def apply(self, snapshot, expected, generation):
         with self.lock:
+            from .certificates import JOURNAL as tls_journal
+            if tls_journal.exists():
+                raise ValueError("Certificate recovery must complete before publication")
             policy = load_policy(self.settings)
             validate_snapshot(snapshot, policy)
             identity = self.live_identity()
@@ -264,9 +272,12 @@ class Broker:
 
     def dispatch(self, req):
         action = req.get("action")
-        allowed = {"bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
+        allowed = {"reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
         if action not in allowed or set(req) - allowed[action]:
             raise ValueError("Unsupported agent request")
+        if action in ("sync-certificates", "reload-tls"):
+            from .certificates import sync
+            return sync(self, force=action == "reload-tls")
         if action == "bootstrap-ingress":
             with self.lock:
                 policy = load_policy(self.settings)
@@ -279,7 +290,8 @@ class Broker:
         if action == "status":
             from . import recovery
             with self.lock:
-                if recovery.pending():
+                from .certificates import JOURNAL as tls_journal
+                if recovery.pending() or tls_journal.exists():
                     raise ValueError("Publish recovery is pending; do not reconcile against an intermediate state")
                 identity = self.live_identity()
                 return {"running": bool(identity), "digest": identity.get("digest"), "generation": identity.get("generation")}
@@ -377,8 +389,8 @@ class Handler(socketserver.StreamRequestHandler):
             if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n"):
                 raise ValueError("Request exceeds limit")
             request = json.loads(raw)
-            if request.get("action") == "bootstrap-ingress" and uid != 0:
-                raise ValueError("Ingress bootstrap is local-root-only")
+            if request.get("action") in ("bootstrap-ingress", "sync-certificates", "reload-tls") and uid != 0:
+                raise ValueError("Ingress/certificate maintenance is local-root-only")
             result = {"ok": True, "data": self.server.broker.dispatch(request)}
         except Exception as exc:
             message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__

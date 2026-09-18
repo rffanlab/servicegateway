@@ -43,13 +43,17 @@ def main():
     # become live merely because the machine/service restarts.
     if os.geteuid() != 0:
         raise SystemExit('Root required')
-    if not JOURNAL.exists():
+    from . import certificates
+    if not JOURNAL.exists() and not certificates.JOURNAL.exists():
         return
     running = subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', 'servicegateway-edge.service'])
     if running.returncode == 0:
         raise SystemExit('Edge is active; recovery must run through the serialized broker')
-    restore_disk()
-    finish()
+    if certificates.restore_files():
+        certificates.finish()
+    if JOURNAL.exists():
+        restore_disk()
+        finish()
     print('Interrupted configuration restored before edge startup; database reconciliation remains required')
 
 

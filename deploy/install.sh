@@ -9,7 +9,13 @@ BASE=/srv/e5-apps/servicegateway
 CFG=/etc/servicegateway
 WORK=$(mktemp -d)
 trap 'rm -rf -- "$WORK"' EXIT
-old=$(readlink -f "$BASE/current" || true)
+old=""
+if [[ -L "$BASE/current" ]]; then
+    old=$(readlink -e "$BASE/current") || { echo 'current 是失效链接，先检查旧版本，不继续覆盖'; exit 1; }
+    [[ -d "$old" && "$old" == "$BASE/releases/"* ]] || { echo 'current 不指向受管 release，拒绝接管'; exit 1; }
+elif [[ -e "$BASE/current" ]]; then
+    echo 'current 必须是受管 release 的链接，拒绝覆盖已有目录或文件'; exit 1
+fi
 if [[ ! -f "$CFG/app.env" ]]; then
     install -d -m 0750 "$CFG"
     install -m 0600 "$ROOT/.env.example" "$CFG/app.env"
@@ -49,15 +55,17 @@ chmod 0640 "$CFG/auth-secret"
 version=$(date -u +%Y%m%dT%H%M%SZ)-$(python3 -c 'import secrets;print(secrets.token_hex(3))')
 release="$BASE/releases/$version"
 install -d -o root -g root -m 0755 "$BASE/releases" "$release"
-tar -C "$ROOT" --exclude=.git --exclude=.venv --exclude=.env --exclude=__pycache__ --exclude=.pytest_cache --exclude='*.db' -cf - . | tar -C "$release" -xf -
+tar -C "$ROOT" --exclude=.git --exclude=.venv --exclude=.env --exclude='*.pem' --exclude='*.key' --exclude='*.p12' --exclude='*.sgpki' --exclude='*.sql' --exclude=__pycache__ --exclude=.pytest_cache --exclude='*.db' -cf - . | tar -C "$release" -xf -
 python3 -m venv "$release/.venv"
 "$release/.venv/bin/pip" install --disable-pip-version-check "$release"
 chown -R root:root "$release"
 chmod -R go-w "$release"
 # Root-only env files are parsed by systemd, not sourced/evaluated as shell.
 cd "$release"
+migration_env="$CFG/app.env"
+[[ ! -f "$CFG/migrate.env" ]] || migration_env="$CFG/migrate.env"
 set +e
-systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" "$release/.venv/bin/python" -m servicegateway.preflight --migrate
+systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "EnvironmentFile=$migration_env" -p "WorkingDirectory=$release" "$release/.venv/bin/python" -m servicegateway.preflight --migrate
 migration_rc=$?
 set -e
 [[ $migration_rc -eq 0 ]] || { echo '数据库迁移失败；尚未切换运行版本'; exit 1; }

@@ -16,5 +16,6 @@
   "management_client_ca": "admin-ca",
   "management_allow_cidrs": [
     "127.0.0.1/32"
-  ]
+  ],
+  "acme_enabled": false
 }
