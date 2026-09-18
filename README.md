@@ -2,9 +2,9 @@
 
 **MySQL 驱动的 Linux 服务管理与网关控制台。默认面向远程服务器，安装后不自动开放公网。**
 
-[English](README.en.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
+[English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
 
-当前为单主机功能版 0.1.0。依据已有 E5 Business Manager 注册合同实现兼容能力，不宣称复制了未提供的 E5 线上源码。代码测试通过不等于目标服务器已部署或通过安全审计。
+当前为单主机功能版 0.1.0。合并代码不代表已经执行生产部署。依据已有 E5 Business Manager 注册合同实现兼容能力，不宣称复制了未提供的 E5 线上源码。代码测试通过不等于目标服务器已部署或通过安全审计。
 
 ## 功能
 
@@ -20,18 +20,18 @@
 
 ## 默认安全边界
 
-管理入口 `127.0.0.1:19091`，管理 API `127.0.0.1:19092`，状态端口 `127.0.0.1:19093`。业务 edge 默认也只监听 loopback。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
+**对外仅 TCP 80/443，由 ServiceGateway 的同一个 Nginx edge 实例统一管理。80 只跳转已登记域名到 HTTPS，443 按 SNI/域名分别转发管理台和业务。** 管理 API `127.0.0.1:19092`、状态端口 `127.0.0.1:19093` 不对外开放。不再创建 19091 控制台入口或 191xx 业务入口。初始 `ingress_enabled=false`，不会在证书与来源限制准备前开监听。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
 
-远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。对外管理入口模板提供 mTLS、CRL 与来源白名单，仍保留应用密码登录。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
+远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与来源白名单，仍保留应用密码登录。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
 
 Web 用户不能写 root policy、systemd unit、sudoers 或 Nginx 日志目录。服务在目标主机安装并经本机管理员批准后才能登记/控制；不自动继承旧 E5 主机授权。不允许控制网关自身、SSH、MySQL 或系统 Nginx。
 
 ## 开始部署
 
-先阅读 [远程安全规范](docs/REMOTE-SECURITY.md)。在远程机独立部署，不先停用 E5。
+先阅读 [统一入口部署](docs/UNIFIED-INGRESS.md) 和 [远程安全规范](docs/REMOTE-SECURITY.md)。在远程机独立部署，不先停用 E5。
 
 ```bash
-git clone --branch feat/e5-mysql-gateway https://github.com/rffanlab/servicegateway.git
+git clone --branch main https://github.com/rffanlab/servicegateway.git
 ```
 
 ```bash

@@ -18,7 +18,7 @@ if [[ ! -f "$CFG/app.env" ]]; then
 fi
 if grep -q REPLACE_WITH "$CFG/app.env"; then echo '请先配置 app.env 中的 MySQL 凭据'; exit 1; fi
 if [[ -z "$old" ]]; then
-    for port in 19091 19092 19093; do
+    for port in 19092 19093; do
         if ss -H -ltn "sport = :$port" | grep -q .; then echo "端口 $port 已占用，拒绝覆盖现有服务"; exit 1; fi
     done
 fi
@@ -62,7 +62,6 @@ migration_rc=$?
 set -e
 [[ $migration_rc -eq 0 ]] || { echo '数据库迁移失败；尚未切换运行版本'; exit 1; }
 for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service; do [[ ! -f "/etc/systemd/system/$file" ]] || cp -a "/etc/systemd/system/$file" "$WORK/$file"; done
-[[ ! -f /etc/nginx/conf.d/servicegateway-console.conf ]] || cp -a /etc/nginx/conf.d/servicegateway-console.conf "$WORK/console.conf"
 changed=0
 rollback() {
     rc=$?
@@ -74,10 +73,8 @@ rollback() {
         for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service; do
             if [[ -f "$WORK/$file" ]]; then cp -a "$WORK/$file" "/etc/systemd/system/$file"; else systemctl disable --now "$file" || true; rm -f "/etc/systemd/system/$file"; fi
         done
-        if [[ -f "$WORK/console.conf" ]]; then cp -a "$WORK/console.conf" /etc/nginx/conf.d/servicegateway-console.conf; else rm -f /etc/nginx/conf.d/servicegateway-console.conf; fi
         systemctl daemon-reload
         [[ -z "$old" ]] || systemctl start servicegateway-agent.service servicegateway.service || true
-        nginx -t && systemctl reload nginx.service || true
     fi
     exit "$rc"
 }
@@ -94,12 +91,10 @@ systemctl restart servicegateway-agent.service servicegateway.service
 healthy=0
 for i in $(seq 1 30); do if curl -fsS --max-time 2 http://127.0.0.1:19092/readyz >/dev/null; then healthy=1; break; fi; sleep 1; done
 [[ $healthy -eq 1 ]]
-install -o root -g root -m 0644 "$release/deploy/nginx-console.conf" /etc/nginx/conf.d/servicegateway-console.conf
-nginx -t
-systemctl reload nginx.service
 install -o root -g root -m 0644 "$release/deploy/logrotate.conf" /etc/logrotate.d/servicegateway
 bash "$release/deploy/verify.sh"
 trap - ERR
-echo '本机组件部署完成；管理入口仅监听 127.0.0.1:19091，未开放公网。请继续 docs/REMOTE-SECURITY.md 验收。'
+echo '本机组件部署完成；未安装额外控制台监听器，未修改系统 Nginx。'
+echo '请按 docs/UNIFIED-INGRESS.md 配置统一 80/443 与证书；不会自动停止占用端口的程序。'
 echo '创建管理员（交互输入，不在参数中放密码）：'
 echo "sudo systemd-run --quiet --wait --pty --collect -p EnvironmentFile=$CFG/app.env -p WorkingDirectory=$release $release/.venv/bin/sgctl admin rffanlab"

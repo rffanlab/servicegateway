@@ -20,6 +20,7 @@ from .config import Settings
 from .ipc import MAX_MESSAGE
 from .nginx import render
 from .schemas import ServiceSpec, Snapshot, endpoint
+from .ingress import validate_ingress_policy, check_frontdoor, probe_ready
 
 CONFIG = Path("/etc/servicegateway/nginx.conf")
 CERTS = Path("/etc/servicegateway/certs")
@@ -64,18 +65,20 @@ def unit_info(unit):
 
 def load_policy(settings):
     policy = json.loads(root_file(settings.policy_file).read_text())
+    policy.setdefault("remote_mode", True)
     ipaddress.IPv4Address(policy.get("listen_address", "0.0.0.0"))
     policy["allowed_cidrs"] = [str(ipaddress.IPv4Network(x, strict=False)) for x in policy["allowed_cidrs"]]
     if not policy["allowed_cidrs"]:
         raise ValueError("At least one global allowed CIDR is required")
     ports = policy["listen_ports"]
-    if any(type(p) is not int or not 1024 <= p <= 65535 or p in (18090, 19091, 19092, 19093) for p in ports):
+    if any(type(p) is not int or not (p == 443 or 1024 <= p <= 65535) or p in (18090, 19091, 19092, 19093) for p in ports):
         raise ValueError("Invalid/reserved listener port")
     if policy.get("remote_mode", True):
         if policy.get("allow_public") or policy.get("include_legacy_registry"):
             raise ValueError("Remote policy forbids public auth and implicit legacy root grants")
         if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", policy.get("management_host", "")):
             raise ValueError("Remote policy requires an exact management_host")
+    validate_ingress_policy(policy, inspect_files=False)
     policy.setdefault("services", {})
     policy["legacy_manifests"] = []
     legacy = Path("/etc/e5-business-manager/assets.d")
@@ -113,10 +116,13 @@ def validate_service(spec, policy, inspect_units=True):
 
 
 def validate_snapshot(snapshot, policy, inspect_units=True):
+    validate_ingress_policy(policy, inspect_files=inspect_units)
     for service in snapshot.services:
         validate_service(service, policy, inspect_units)
     for route in snapshot.routes:
         if policy.get("remote_mode", True):
+            if not policy.get("ingress_enabled", False) or route.listen_port != 443:
+                raise ValueError("Remote business routes require the enabled unified 443 ingress")
             if route.auth not in ("api_key", "mtls") or not route.certificate or route.host == "_":
                 raise ValueError("Remote routes require exact host, TLS and API key or mTLS; no legacy/shared admin session")
             if route.host == policy.get("management_host"):
@@ -203,29 +209,19 @@ class Broker:
                 time.sleep(.25)
             raise ValueError("Interrupted publish restoration is unverified; keeping journal")
 
-    def check_listeners(self, snapshot, digest, generation=None):
-        import http.client
-        import ssl
+    def check_listeners(self, snapshot, digest, generation=None, policy=None):
+        policy = policy or load_policy(self.settings)
+        if policy.get("remote_mode", True) and not check_frontdoor(policy, digest, generation):
+            return False
         seen = set()
-        for r in snapshot.routes:
-            key = (r.listen_port, r.host)
-            if not r.enabled or key in seen:
+        for route in snapshot.routes:
+            key = (route.listen_port, route.host)
+            if not route.enabled or key in seen:
                 continue
             seen.add(key)
-            # Loopback-only readiness probe; verifies config identity, not PKI trust.
-            ctx = ssl._create_unverified_context()
-            if r.client_ca:
-                ctx.load_cert_chain(str(CERTS / r.client_ca / "probe.crt"), str(CERTS / r.client_ca / "probe.key"))
-            conn = http.client.HTTPSConnection("127.0.0.1", r.listen_port, timeout=1, context=ctx) if r.certificate else http.client.HTTPConnection("127.0.0.1", r.listen_port, timeout=1)
-            try:
-                conn.request("GET", "/_sg/ready", headers={"Host": r.host if r.host != "_" else "localhost"})
-                resp = conn.getresponse()
-                if resp.status != 200 or resp.read(100).decode() != digest or (generation and resp.getheader("X-SG-Generation") != generation):
-                    return False
-            except (OSError, http.client.HTTPException):
+            if not probe_ready(route.host, route.listen_port, route.certificate, route.client_ca,
+                               digest, generation, require_sni=policy.get("remote_mode", True)):
                 return False
-            finally:
-                conn.close()
         return True
 
     def apply(self, snapshot, expected, generation):
@@ -254,7 +250,7 @@ class Broker:
             try:
                 command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
                 for _ in range(20):
-                    if self.live_identity() == {"digest": target, "generation": generation} and self.check_listeners(snapshot, target, generation):
+                    if self.live_identity() == {"digest": target, "generation": generation} and self.check_listeners(snapshot, target, generation, policy):
                         recovery.finish()
                         return {"digest": target, "changed": True}
                     time.sleep(0.25)
@@ -268,9 +264,18 @@ class Broker:
 
     def dispatch(self, req):
         action = req.get("action")
-        allowed = {"status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
+        allowed = {"bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
         if action not in allowed or set(req) - allowed[action]:
             raise ValueError("Unsupported agent request")
+        if action == "bootstrap-ingress":
+            with self.lock:
+                policy = load_policy(self.settings)
+                if not policy.get("remote_mode", True) or not policy.get("ingress_enabled", False):
+                    raise ValueError("Configure and explicitly enable remote ingress in root policy first")
+                empty = Snapshot()
+                if self.live_digest() != empty.digest():
+                    raise ValueError("Bootstrap requires an empty live gateway; use normal publication for existing services")
+                return self.apply(empty, empty.digest(), secrets.token_hex(16))
         if action == "status":
             from . import recovery
             with self.lock:
@@ -296,7 +301,7 @@ class Broker:
             return {"sample": items[-200:], "sampled_bytes": len(raw)}
         policy = load_policy(self.settings)
         if action == "inventory":
-            return {"manifests": policy["legacy_manifests"], "grants": policy["services"], "listen_ports": policy["listen_ports"], "allow_public": policy.get("allow_public", False), "allowed_cidrs": policy["allowed_cidrs"]}
+            return {"remote_mode": policy.get("remote_mode", True), "ingress_enabled": policy.get("ingress_enabled", False), "manifests": policy["legacy_manifests"], "grants": policy["services"], "listen_ports": policy["listen_ports"], "allow_public": policy.get("allow_public", False), "allowed_cidrs": policy["allowed_cidrs"]}
         if action in ("validate", "apply"):
             snap = Snapshot.model_validate(req["snapshot"])
             if action == "apply":
@@ -371,7 +376,10 @@ class Handler(socketserver.StreamRequestHandler):
         try:
             if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n"):
                 raise ValueError("Request exceeds limit")
-            result = {"ok": True, "data": self.server.broker.dispatch(json.loads(raw))}
+            request = json.loads(raw)
+            if request.get("action") == "bootstrap-ingress" and uid != 0:
+                raise ValueError("Ingress bootstrap is local-root-only")
+            result = {"ok": True, "data": self.server.broker.dispatch(request)}
         except Exception as exc:
             message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
             # Never include an auth-secret, password, cookie or entire input.

@@ -12,11 +12,11 @@ from conftest import POLICY, SPEC, PASSWORD, SECRET, route, register, save_route
 
 
 def remote_policy():
-    return {**deepcopy(POLICY), 'remote_mode': True, 'management_host': 'admin.example.test'}
+    return {**deepcopy(POLICY), 'remote_mode': True, 'listen_ports': [443], 'ingress_enabled': True, 'management_host': 'admin.example.test', 'management_certificate':'admin', 'management_client_ca':'admin-ca', 'management_allow_cidrs':['127.0.0.1/32']}
 
 
 def remote_route(**extra):
-    return route(auth='api_key', host='app.example.test', certificate='tls-app', rate_per_second=10, **extra)
+    return route(listen_port=443, auth='api_key', host='app.example.test', certificate='tls-app', rate_per_second=10, **extra)
 
 
 @pytest.mark.parametrize('bad', [dict(secure_cookie=False),dict(cookie_domain='example.test'),dict(public_origin='http://admin.example.test')])

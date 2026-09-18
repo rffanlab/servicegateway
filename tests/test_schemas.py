@@ -46,7 +46,7 @@ def test_policy_restricts_port_upstream_public_and_cidr():
 
 def test_tls_listener_consistency():
     with pytest.raises(ValidationError):
-        Snapshot(services=[ServiceSpec(**SPEC)], routes=[RouteSpec(**route(certificate='cert-one')),RouteSpec(**route(id='other',host='example.test',certificate='cert-two'))])
+        Snapshot(services=[ServiceSpec(**SPEC)], routes=[RouteSpec(**route(certificate='cert-one')),RouteSpec(**route(id='other',path='/other/',certificate='cert-two'))])
 
 
 def test_digest_stable_and_sensitive():

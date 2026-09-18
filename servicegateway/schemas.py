@@ -78,7 +78,7 @@ class RouteSpec(Strict):
     id: str = Field(pattern=ID)
     name: str = Field(min_length=1, max_length=100)
     service_id: str = Field(pattern=ID)
-    listen_port: int = Field(ge=1024, le=65535)
+    listen_port: int = Field(default=443, ge=1, le=65535)
     host: str = Field(default="_", max_length=253)
     path: str = "/"
     strip_prefix: bool = False
@@ -97,6 +97,13 @@ class RouteSpec(Strict):
     allow_cidrs: list[str] = Field(default_factory=list, max_length=32)
     certificate: str | None = Field(default=None, pattern=ID)
     balance: Literal["round_robin", "least_conn", "ip_hash"] = "round_robin"
+
+    @field_validator("listen_port")
+    @classmethod
+    def business_port(cls, value):
+        if value != 443 and value < 1024:
+            raise ValueError("Business listeners use 443; high ports are LAN-only. Port 80 is redirect-only")
+        return value
 
     @field_validator("host")
     @classmethod
@@ -140,7 +147,7 @@ class Snapshot(Strict):
         service_ids = {x.id for x in self.services}
         if len(service_ids) != len(self.services) or len({x.id for x in self.routes}) != len(self.routes):
             raise ValueError("Duplicate identifiers")
-        matches, listeners = set(), {}
+        matches, listeners, protocols = set(), {}, {}
         for r in self.routes:
             if r.service_id not in service_ids:
                 raise ValueError(f"Unknown service: {r.service_id}")
@@ -150,9 +157,12 @@ class Snapshot(Strict):
             if key in matches:
                 raise ValueError("Conflicting port/host/path")
             matches.add(key)
-            listener = listeners.setdefault(r.listen_port, (r.certificate, r.client_ca))
+            protocol = protocols.setdefault(r.listen_port, bool(r.certificate))
+            if protocol != bool(r.certificate):
+                raise ValueError("A port cannot mix plaintext and TLS")
+            listener = listeners.setdefault((r.listen_port, r.host), (r.certificate, r.client_ca))
             if listener != (r.certificate, r.client_ca):
-                raise ValueError("All routes on a port must use the same TLS certificate")
+                raise ValueError("Routes sharing a hostname and port must use identical server certificate and client CA")
         return self
 
     def digest(self):

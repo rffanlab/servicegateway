@@ -33,8 +33,8 @@ class Settings(BaseSettings):
                 or not re.fullmatch(r"[a-zA-Z0-9.-]+", u.hostname)):
             raise ValueError("SG_PUBLIC_ORIGIN must be one exact HTTP(S) origin")
         if self.deployment_mode == "remote":
-            if not self.secure_cookie or self.cookie_domain or u.scheme != "https":
-                raise ValueError("Remote mode requires HTTPS, Secure host-only cookies")
+            if not self.secure_cookie or self.cookie_domain or u.scheme != "https" or u.port not in (None, 443):
+                raise ValueError("Remote mode requires standard HTTPS port 443 and Secure host-only cookies")
         return self
 
     @property

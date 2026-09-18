@@ -1,5 +1,6 @@
 from collections import defaultdict
 from .schemas import Snapshot
+from .ingress import render_frontdoor
 
 
 def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_port=19092, generation=None):
@@ -31,6 +32,8 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         f"    location = /_sg/ready {{ add_header X-SG-Generation {generation}; return 200 '{digest}'; }}",
         "    location / { return 404; }", "  }",
     ]
+    if policy.get("remote_mode", False):
+        lines += render_frontdoor(snapshot, policy, digest, generation, admin_port)
     groups = defaultdict(list)
     for r in snapshot.routes:
         if not r.enabled:
@@ -55,6 +58,9 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         lines += ["  server {", f"    listen {address}:{port}{' ssl' if cert else ''};", f"    server_name {host};"]
         if host != '_':
             lines.append(f"    if ($host != {host}) {{ return 421; }}")
+        if cert and policy.get("remote_mode", False):
+            # SNI must select the same vhost whose HTTP policy is evaluated.
+            lines.append(f"    if ($ssl_server_name != {host}) {{ return 421; }}")
         if cert:
             lines += [f"    ssl_certificate /etc/servicegateway/certs/{cert}/fullchain.pem;",
                       f"    ssl_certificate_key /etc/servicegateway/certs/{cert}/privkey.pem;",
@@ -65,6 +71,8 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       f"    ssl_crl /etc/servicegateway/certs/{ca}/crl.pem;",
                       "    ssl_verify_client on;", "    ssl_verify_depth 2;",
                       "    ssl_session_cache off;"]
+            if policy.get("remote_mode", False):
+                lines.append("    if ($ssl_client_verify != SUCCESS) { return 403; }")
         # return executes before allow/deny, so restrict in that same rewrite phase.
         if not ca:
             lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",

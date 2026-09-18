@@ -8,11 +8,11 @@ MySQL-backed, single-host Linux service management and Nginx gateway control pla
 
 FastAPI, SQLAlchemy, PyMySQL and Alembic; a local Chinese management UI; an independent Nginx data plane; a constrained root broker over a peer-UID-verified Unix socket. Includes service registration, health snapshots, ordered lifecycle operations, routing, scoped keys, roles, audit, draft releases and rollback.
 
-Management endpoints bind to loopback ports 19091/19092; edge status uses 19093. Business edge listeners are loopback-only by default. Production requires MySQL; SQLite is allowed only in isolated tests.
+The same managed Nginx edge owns public TCP 80 and 443. Port 80 redirects approved hosts only; 443 serves the protected management vhost and business SNI hosts. API 19092 and status 19093 remain loopback-only. There are no additional console or 191xx business listeners. Ingress is staged off until explicitly configured. See [unified ingress](docs/UNIFIED-INGRESS.md). Production requires MySQL; SQLite is allowed only in isolated tests.
 
 ## Remote security defaults
 
-Remote mode requires a dedicated HTTPS management origin and Secure host-only cookies. The external management template adds mTLS, CRL and source-IP restrictions, with application password authentication retained. Business hosts must differ from the management host. Remote business routes require TLS and a scoped API key or mTLS; shared admin sessions, legacy E5 auth and public routes are rejected.
+Remote mode requires a dedicated HTTPS management origin and Secure host-only cookies. The root-policy-managed admin vhost adds mTLS, CRL and source-IP restrictions, with application password authentication retained. Business hosts must differ from the management host. Remote business routes require TLS and a scoped API key or mTLS; shared admin sessions, legacy E5 auth and public routes are rejected.
 
 The implementation includes CSRF and Host/Origin validation, bounded JSON management bodies, duplicate credential-header rejection, idle session expiry, recent-password checks for sensitive writes, credential stripping and rate/connection limits. Root-owned policy approves explicit units, endpoints and ports. The UI cannot edit that policy or run arbitrary shell/systemctl commands. Legacy E5 grants are not automatically trusted on the remote host.
 

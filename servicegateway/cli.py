@@ -21,9 +21,17 @@ def main():
     export = sub.add_parser("export-e5", help="Read E5 dynamic manifests or sanitize an exported /api/overview JSON")
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
+    sub.add_parser("bootstrap-ingress", help="Root-only: activate approved 80/443 entry on an empty gateway")
     args = p.parse_args()
     settings = Settings()
-    if args.command == "admin":
+    if args.command == "bootstrap-ingress":
+        if os.geteuid() != 0:
+            raise SystemExit("Ingress bootstrap requires local root")
+        from .ipc import AgentClient
+        result = AgentClient(settings.agent_socket).call("bootstrap-ingress")
+        print(json.dumps(result))
+        print("已验证 80/443 入口；未修改 SSH、防火墙或业务数据。")
+    elif args.command == "admin":
         from .main import LoginBody
         LoginBody(username=args.username, password="validation-only")
         password = getpass.getpass("管理员密码（至少 12 位）: ")
@@ -81,12 +89,15 @@ def main():
         if os.geteuid() != 0:
             raise SystemExit("Root required")
         from .agent import CONFIG, atomic_write, load_policy
+        from .ingress import validate_ingress_policy
         from .nginx import render
         if CONFIG.exists():
             print("保留已有网关配置，未覆盖。")
             return
         snap = Snapshot()
-        atomic_write(CONFIG, render(snap, load_policy(settings), snap.digest(), settings.auth_secret(), settings.admin_port))
+        policy = load_policy(settings)
+        validate_ingress_policy(policy, inspect_files=True)
+        atomic_write(CONFIG, render(snap, policy, snap.digest(), settings.auth_secret(), settings.admin_port))
         print("已创建空网关配置；未修改系统 Nginx。")
 
 
