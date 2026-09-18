@@ -38,10 +38,12 @@ jobs:
           alembic check
       - name: Syntax checks
         run: |
-          python -m compileall -q servicegateway migrations tests
+          python -m compileall -q servicegateway migrations tests deploy
           node --check servicegateway/static/app.js
           bash -n deploy/install.sh
           bash -n deploy/verify.sh
+          bash -n deploy/full-deploy.sh
+          python deploy/bootstrap.py --dry-run
       - name: Run tests against MySQL and real Nginx
         run: pytest -v --junitxml=test-results.xml
       - name: Package reviewed source and test evidence

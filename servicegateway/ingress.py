@@ -4,6 +4,7 @@ import ipaddress
 import re
 import socket
 import ssl
+from .acme import http_vhost
 
 CERT_ID = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
@@ -17,6 +18,8 @@ def validate_ingress_policy(policy, inspect_files=True):
         raise ValueError("Use loopback for staging or 0.0.0.0 after explicit network approval")
     if type(policy.get("ingress_enabled", False)) is not bool:
         raise ValueError("ingress_enabled must be a boolean")
+    if type(policy.get("acme_enabled", False)) is not bool:
+        raise ValueError("acme_enabled must be a boolean")
     if not policy.get("ingress_enabled", False):
         return  # Empty staged gateway: no public listeners, no certificate requirement yet.
     host = policy.get("management_host", "")
@@ -49,7 +52,7 @@ def render_frontdoor(snapshot, policy, digest, generation, admin_port):
     if not policy.get("ingress_enabled", False):
         if any(route.enabled for route in snapshot.routes):
             raise ValueError("Enable the approved unified ingress before publishing business routes")
-        return []
+        return http_vhost(policy.get("listen_address", "127.0.0.1"), "_", True, default=True) if policy.get("acme_enabled", False) else []
     host = policy['management_host']
     cert, ca = policy['management_certificate'], policy['management_client_ca']
     address = policy.get('listen_address', '127.0.0.1')
@@ -67,15 +70,14 @@ def render_frontdoor(snapshot, policy, digest, generation, admin_port):
         # Deny an unknown SNI at handshake, and unknown HTTP hosts on reused connections.
         f'  server {{ listen {address}:443 ssl default_server;',
         '    ssl_reject_handshake on; return 421; }',
-        f'  server {{ listen {address}:80 default_server; server_name _; return 404; }}',
         '  limit_req_zone $binary_remote_addr zone=sg_admin_login:1m rate=5r/m;',
         '  limit_req_zone $binary_remote_addr zone=sg_admin_api:1m rate=10r/s;',
         '  limit_conn_zone $binary_remote_addr zone=sg_admin_conn:1m;',
     ]
+    lines += http_vhost(address, "_", policy.get("acme_enabled", False), default=True)
     for name in sorted(hosts):
         # Literal approved name, never an arbitrary Host header in Location.
-        lines += [f'  server {{ listen {address}:80; server_name {name};',
-                  f'    return 308 https://{name}$request_uri; }}']
+        lines += http_vhost(address, name, policy.get("acme_enabled", False), redirect=True)
     lines += [
         f'  server {{ listen {address}:443 ssl; server_name {host};',
         f'    if ($host != {host}) {{ return 421; }}',

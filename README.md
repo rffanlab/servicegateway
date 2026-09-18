@@ -2,7 +2,7 @@
 
 **MySQL 驱动的 Linux 服务管理与网关控制台。默认面向远程服务器，安装后不自动开放公网。**
 
-[English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
+[完整一键部署](docs/FULL-DEPLOYMENT.md) · [English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
 
 当前为单主机功能版 0.1.0。合并代码不代表已经执行生产部署。依据已有 E5 Business Manager 注册合同实现兼容能力，不宣称复制了未提供的 E5 线上源码。代码测试通过不等于目标服务器已部署或通过安全审计。
 
@@ -25,6 +25,16 @@
 远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与来源白名单，仍保留应用密码登录。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
 
 Web 用户不能写 root policy、systemd unit、sudoers 或 Nginx 日志目录。服务在目标主机安装并经本机管理员批准后才能登记/控制；不自动继承旧 E5 主机授权。不允许控制网关自身、SSH、MySQL 或系统 Nginx。
+
+## 完整部署（含 Nginx / MySQL / Let's Encrypt）
+
+Ubuntu Server 24.04 新服务器使用 `deploy/full-deploy.sh`；原 `deploy/install.sh` 继续用于仅应用升级。先设置管理域名 A 记录、放行 HTTP-01 所需 TCP 80，并保留 SSH 救援。以下域名、邮箱、IP 都是需要替换的示例：
+
+```bash
+sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --admin-cidr 203.0.113.10/32 --agree-tos
+```
+
+脚本安装依赖、创建 MySQL schema/独立迁移与运行账号、申请管理服务器证书、生成管理客户端 p12/加密 CA 恢复包、初始化管理员并启用统一 80/443。Let's Encrypt 每日两次自动检查续期；管理客户端 CA 的 CRL 需持离线口令的人通过 `pki-refresh` 定期维护。现有端口/未知数据库冲突会拒绝覆盖；不修改 SSH、防火墙或云安全组。先用 `bash deploy/full-deploy.sh --dry-run` 查看计划，细节和首次登录见[完整部署说明](docs/FULL-DEPLOYMENT.md)。
 
 ## 开始部署
 
@@ -62,6 +72,6 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 
 ## 边界
 
-单主机、单控制面 worker；不包含分布式高可用、自动 ACME、OIDC、WAF、模型计费、GPU 任务配额、远程 SSH 命令执行或旧环境变量管理的自动迁移。上游只接受批准的 IPv4 HTTP 地址；远端上游需走受控专网/加密隧道，不应通过公网明文转发。
+单主机、单控制面 worker；不包含分布式高可用、DNS-01 通配符签发、OIDC、WAF、模型计费、GPU 任务配额、远程 SSH 命令执行或旧环境变量管理的自动迁移。上游只接受批准的 IPv4 HTTP 地址；远端上游需走受控专网/加密隧道，不应通过公网明文转发。
 
 访问采样不是全量时序监控。撤销 Key/证书或退出登录不会强制断开已建立的长连接。路径代理不自动修复应用的绝对 URL、Cookie Path 和重定向。依赖尚未完整哈希锁定，公网生产前需要固定版本、漏洞扫描、备份恢复和真实主机验收。

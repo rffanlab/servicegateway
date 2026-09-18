@@ -1,0 +1,17 @@
+[Unit]
+Description=Renew ServiceGateway ACME certificates and verify deployment
+After=network-online.target servicegateway-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/srv/e5-apps/servicegateway/current
+ExecStart=/srv/e5-apps/servicegateway/current/.venv/bin/python -I -m servicegateway.deploykit renew
+UMask=0077
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/servicegateway /var/lib/servicegateway /srv/e5-logs/servicegateway

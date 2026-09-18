@@ -120,9 +120,16 @@ commonName = supplied
     api=route().model_dump();api['upstreams']=[{'port':backend.server_port}]
     web={**api,'id':'web','name':'web','host':'web.example.test','certificate':'web','auth':'mtls','client_ca':'web-ca'}
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=[RouteSpec(**api),RouteSpec(**web)])
-    conf=render(snap,policy(),snap.digest(),SECRET,backend.server_port)
+    acme_policy = {**policy(), 'acme_enabled': True}
+    conf=render(snap,acme_policy,snap.digest(),SECRET,backend.server_port)
     tls_port,http_port,status_port=free_port(),free_port(),free_port()
-    conf=conf.replace('user www-data;','').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('/etc/servicegateway/certs',str(tmp_path))
+    import os, pwd
+    conf=conf.replace('user www-data;', 'user '+pwd.getpwuid(os.getuid()).pw_name+';').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('/etc/servicegateway/certs',str(tmp_path))
+    conf=conf.replace('/var/lib/servicegateway/acme-webroot', str(tmp_path/'acme'))
+    challenge=tmp_path/'acme/.well-known/acme-challenge';challenge.mkdir(parents=True)
+    (challenge/'test_token-123').write_text('public-acme-proof')
+    (tmp_path/'private-secret').write_text('MUST-NOT-LEAK')
+    (challenge/'link_token').symlink_to(tmp_path/'private-secret')
     conf=conf.replace('127.0.0.1:443',f'127.0.0.1:{tls_port}').replace('127.0.0.1:80',f'127.0.0.1:{http_port}').replace('127.0.0.1:19093',f'127.0.0.1:{status_port}')
     for directory in ('client','proxy'):(tmp_path/directory).mkdir()
     path=tmp_path/'nginx.conf';path.write_text(conf)
@@ -180,3 +187,15 @@ def test_real_sni_host_mismatch_and_unknown_sni_fail_closed(unified_edge):
     assert req('admin.example.test',sni='web.example.test',cert='web-ca')[0] in (403,421)
     assert req('web.example.test',sni='admin.example.test',cert='admin-ca')[0]==421
     with pytest.raises(ssl.SSLError):req('unknown.example.test')
+
+
+def test_real_acme_token_only_and_unchanged_https(unified_edge):
+    req = unified_edge
+    for host in ('admin.example.test', 'api.example.test', 'new.example.test'):
+        status, _, body = req(host, path='/.well-known/acme-challenge/test_token-123', plain=True)
+        assert status == 200 and body == b'public-acme-proof'
+        assert req(host, path='/.well-known/acme-challenge/missing_token', plain=True)[0] == 404
+        assert req(host, path='/.well-known/acme-challenge/link_token', plain=True)[0] in (403, 404)
+    assert req('admin.example.test', path='/.well-known/acme-challenge/.env', plain=True)[0] == 404
+    assert req('admin.example.test', path='/.well-known/acme-challenge/', plain=True)[0] == 404
+    assert req('admin.example.test', cert='admin-ca')[0] == 200

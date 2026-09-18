@@ -49,15 +49,17 @@ chmod 0640 "$CFG/auth-secret"
 version=$(date -u +%Y%m%dT%H%M%SZ)-$(python3 -c 'import secrets;print(secrets.token_hex(3))')
 release="$BASE/releases/$version"
 install -d -o root -g root -m 0755 "$BASE/releases" "$release"
-tar -C "$ROOT" --exclude=.git --exclude=.venv --exclude=.env --exclude=__pycache__ --exclude=.pytest_cache --exclude='*.db' -cf - . | tar -C "$release" -xf -
+tar -C "$ROOT" --exclude=.git --exclude=.venv --exclude=.env --exclude='*.pem' --exclude='*.key' --exclude='*.p12' --exclude='*.sgpki' --exclude='*.sql' --exclude=__pycache__ --exclude=.pytest_cache --exclude='*.db' -cf - . | tar -C "$release" -xf -
 python3 -m venv "$release/.venv"
 "$release/.venv/bin/pip" install --disable-pip-version-check "$release"
 chown -R root:root "$release"
 chmod -R go-w "$release"
 # Root-only env files are parsed by systemd, not sourced/evaluated as shell.
 cd "$release"
+migration_env="$CFG/app.env"
+[[ ! -f "$CFG/migrate.env" ]] || migration_env="$CFG/migrate.env"
 set +e
-systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" "$release/.venv/bin/python" -m servicegateway.preflight --migrate
+systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "EnvironmentFile=$migration_env" -p "WorkingDirectory=$release" "$release/.venv/bin/python" -m servicegateway.preflight --migrate
 migration_rc=$?
 set -e
 [[ $migration_rc -eq 0 ]] || { echo '数据库迁移失败；尚未切换运行版本'; exit 1; }
