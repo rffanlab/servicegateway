@@ -1,0 +1,20 @@
+{
+  "listen_address": "127.0.0.1",
+  "listen_ports": [
+    443
+  ],
+  "allowed_cidrs": [
+    "127.0.0.1/32"
+  ],
+  "allow_public": false,
+  "services": {},
+  "remote_mode": true,
+  "management_host": "admin.invalid",
+  "include_legacy_registry": false,
+  "ingress_enabled": false,
+  "management_certificate": "admin",
+  "management_client_ca": "admin-ca",
+  "management_allow_cidrs": [
+    "127.0.0.1/32"
+  ]
+}

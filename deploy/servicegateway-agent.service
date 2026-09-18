@@ -1,0 +1,26 @@
+[Unit]
+Description=ServiceGateway constrained local privileged broker
+After=network-online.target servicegateway-edge.service
+Wants=servicegateway-edge.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/e5-apps/servicegateway/current
+ExecStart=/srv/e5-apps/servicegateway/current/.venv/bin/python -I -m servicegateway.agent
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=servicegateway-agent
+RuntimeDirectoryMode=0750
+ExecStartPre=/usr/bin/chgrp servicegateway /run/servicegateway-agent
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/servicegateway /run/servicegateway-agent /run/servicegateway-edge /var/lib/servicegateway /srv/e5-logs/servicegateway
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,59 @@
+name: Gateway verification
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-password
+          MYSQL_DATABASE: servicegateway_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pci-only-password"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      SG_DATABASE_URL: 'mysql+pymysql://root:ci-only-password@127.0.0.1:3306/servicegateway_test?charset=utf8mb4'
+      TEST_MYSQL_URL: 'mysql+pymysql://root:ci-only-password@127.0.0.1:3306/servicegateway_test?charset=utf8mb4'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nginx
+          python -m pip install -e '.[test]'
+      - name: Validate MySQL migrations
+        run: |
+          alembic upgrade head
+          alembic check
+      - name: Syntax checks
+        run: |
+          python -m compileall -q servicegateway migrations tests
+          node --check servicegateway/static/app.js
+          bash -n deploy/install.sh
+          bash -n deploy/verify.sh
+      - name: Run tests against MySQL and real Nginx
+        run: pytest -v --junitxml=test-results.xml
+      - name: Package reviewed source and test evidence
+        if: always()
+        run: |
+          git archive --format=tar.gz --output=servicegateway-source.tar.gz HEAD
+          python -m pip freeze > test-environment.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-and-test-evidence
+          path: |
+            servicegateway-source.tar.gz
+            test-results.xml
+            test-environment.txt
