@@ -4,7 +4,7 @@
 
 ## 1. 你只需准备的内容
 
-准备一个管理域名、邮箱、管理电脑的出口公网 IP，以及可用的 sudo/SSH。域名 A 记录指向这台服务器；证书签发时公网 TCP 80 必须能到达网关。服务器业务流量只使用 TCP 80/443；不要开放 MySQL、19092、19093 和业务上游端口。
+准备一个管理域名、邮箱，以及可用的 sudo/SSH。**不需要固定出口 IP**：新安装默认通过管理客户端证书 + 账号密码验证身份，换网络后无需重新登记 IP。域名 A 记录指向这台服务器；证书签发时公网 TCP 80 必须能到达网关。服务器业务流量只使用 TCP 80/443；不要开放 MySQL、19092、19093 和业务上游端口。
 
 当前 edge 只生成 IPv4 监听，检测到 AAAA 记录会停止，不会忽略 IPv6 验证问题。通配符、只有内网解析的域名需要 DNS-01，此脚本不索取 DNS 平台 Token、不自动实现 DNS-01。使用 CDN 的域名首次安装建议 DNS-only，并确认验证路径能到达源站。
 
@@ -26,18 +26,22 @@ git fetch origin && git switch main && git pull --ff-only origin main
 bash deploy/full-deploy.sh --dry-run
 ```
 
-正式安装，**将下面的域名、邮箱、203.0.113.10/32 全部换成真实值**：
+正式安装，**将下面的域名和邮箱换成真实值**：
 
 ```bash
-sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --admin-cidr 203.0.113.10/32 --agree-tos
+sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --agree-tos
 ```
 
-多个管理出口 IP 可以重复 `--admin-cidr`。这个 IP 是你的管理客户端出口，不是服务器 IP。默认管理员名 `rffanlab`，需要其他名字时加 `--admin-user`，之后重跑保留相同参数。
+默认不传 `--admin-cidr`；不需要自动探测、追踪或记录你的出口 IP。客户端证书与账号密码、证书撤销检查、CSRF、会话过期和限流仍然生效，**不绑定 IP 不等于免登录**。
+
+仅在有固定出口且希望叠加来源限制时，才加 `--admin-cidr 203.0.113.10/32`（示例 IP 须替换，可重复）。它是附加条件，不会取代客户端证书/密码。不要传 `0.0.0.0/0` 冒充白名单；动态出口直接省略参数。
+
+默认管理员名 `rffanlab`，需要其他名字时加 `--admin-user`。重跑已有部署不会因为省略参数而自动移除旧白名单；旧安装的显式切换见本文第 9 节。
 
 确实要复用已有 MySQL，先核实其只绑定本机，再显式添加 `--reuse-mysql`。脚本不会改 MySQL root 口令，不会接管同名 schema 或同名专用账号；root 通过本机 socket 认证。已有数据库需要密码时，使用仅 root 可读的 MySQL defaults 文件：
 
 ```bash
-sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --admin-cidr 203.0.113.10/32 --agree-tos --reuse-mysql --mysql-admin-file /root/mysql-admin.cnf
+sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --agree-tos --reuse-mysql --mysql-admin-file /root/mysql-admin.cnf
 ```
 
 `mysql-admin.cnf` 必须 root 所有、0600，内容是标准 `[client]` / `password=...` 格式；不要把内容提交 Git 或发到聊天。脚本不支持交互式 `mysql -p`，也不把数据库密码放在进程参数中。
@@ -56,7 +60,7 @@ PKI 初始化会隐藏输入一次口令（首次重复确认）：该口令保�
 | ACME 引导 | 先让同一个 edge 的 80 端口只提供隔离的 HTTP-01 文件验证；此时不开放登录，也不使用临时自签服务器证书对外冒充正式 HTTPS |
 | 证书 | 默认先 certbot dry-run 做 staging 验证，再申请生产证书；验证域名、有效期、公钥匹配、公共信任链 |
 | 管理身份 | 创建管理员随机密码、专用私有客户端 CA、浏览器 p12、探测客户端证书、CRL；CA 私钥仅保留在加密恢复包里 |
-| 激活 | 配置管理域名、mTLS、来源白名单；通过 root-only bootstrap 启用统一 80/443 |
+| 激活 | 配置管理域名、mTLS、密码登录与可选来源白名单；通过 root-only bootstrap 启用统一 80/443 |
 | 续期 | 安装每日两次、带随机延迟的专用 systemd timer；续期成功同步文件、nginx -t、reload 并检查线上证书指纹 |
 | 验收 | 本机服务状态、证书期限和发布身份检查；输出凭据/恢复包位置，外部端口和业务仍须现场验收 |
 
@@ -153,7 +157,26 @@ Certbot 详细日志在 `/srv/e5-logs/servicegateway/certbot/`。排障不要把
 
 仓库测试验证脚本输入/幂等SQL/保留数据、真实 OpenSSL 的客户端 PKI、认证加密恢复包、证书校验/恢复以及真实 Nginx HTTP-01、SSE/WebSocket、TLS/mTLS。MySQL CI 继续验证应用迁移和 API。它们不等于已经在你的远程服务器成功安装 apt 包或向 Let's Encrypt 生产 CA 实际签发证书。
 
-上线还需实际验证：域名控制权、A/AAAA、80 入站、证书信任、客户端 p12、来源 IP、只暴露批准的 TCP 80/443、MySQL/业务内部端口不可达、真实业务与备份恢复。脚本不是漏洞扫描器，Python 依赖尚未完整哈希锁定；需要固定生产构建并持续安装安全补丁。新脚本使用发行版包，不配置额外 PPA，不执行整机 apt upgrade。
+上线还需实际验证：域名控制权、A/AAAA、80 入站、证书信任、客户端 p12、动态来源可用/可选白名单有效、只暴露批准的 TCP 80/443、MySQL/业务内部端口不可达、真实业务与备份恢复。脚本不是漏洞扫描器，Python 依赖尚未完整哈希锁定；需要固定生产构建并持续安装安全补丁。新脚本使用发行版包，不配置额外 PPA，不执行整机 apt upgrade。
+
+## 9. 动态出口 IP 与旧版白名单
+
+新安装生成 `management_ip_filter=false` 和 `management_allow_cidrs=[]`。管理虚拟主机不生成来源地址 allow/deny 规则，但仍强制 mTLS、CRL、密码登录与原有限流。运行期 MySQL、内部 API 和业务上游不会因此开放网络监听。
+
+旧版 `policy.json` 没有 `management_ip_filter` 字段时，按 `true` 处理，保留原白名单；升级或省略 `--admin-cidr` 重跑不会静默放宽旧访问权限。首次部署尚未执行的用户直接使用第 2 节不带 IP 的命令即可。
+
+已经启用旧白名单时，先保留私有 SSH/救援通道并备份 `/etc/servicegateway/policy.json`；升级应用后，由本机管理员只改以下管理字段，其他键原样保留：
+
+```json
+{
+  "management_ip_filter": false,
+  "management_allow_cidrs": []
+}
+```
+
+随后从现有可用的管理入口走“预览 → 发布”应用新策略；仅编辑 JSON 或执行 Nginx reload 不会重新生成配置。不要清空现有业务路由来重新 bootstrap。如果已因旧来源限制无法访问管理入口，先通过私有救援恢复受控管理访问，再执行正常发布，不关闭 mTLS 或密码登录。新策略发布失败时沿用已有网关配置恢复流程，核对线上结果后再移除旧策略备份。
+
+业务 `allowed_cidrs` 与管理 IP 策略独立，不随此次更新放宽。业务客户端也使用动态 IP 时，可以由本机管理员**明确审核**业务根策略 `allowed_cidrs=["0.0.0.0/0"]`，再对选定路由发布；远程模式仍强制 TLS + 路由 Key 或 mTLS，禁止 public 路由。不要据此向公网开放业务上游/MySQL 端口。云安全组或主机防火墙若仍把 TCP 443 限定为旧出口 IP，也需独立审核调整；脚本不会自动修改它们。
 
 ## 官方依据
 

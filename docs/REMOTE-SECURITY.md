@@ -17,6 +17,7 @@
 | 项目 | 当前行为 |
 |---|---|
 | 远程配置 | 必须 HTTPS public origin、Secure Cookie、无 Cookie Domain；安装预检禁止测试模式、要求独立本机 MySQL 数据库 |
+| 动态管理 IP | 新安装不要求固定出口 IP，mTLS + 密码强制；IP 白名单仅为可选附加条件。旧策略缺少 management_ip_filter 时保留来源限制 |
 | 远程路由 | 只允许端口 443，必须精确域名、TLS、`api_key` 或 `mtls`、正数限流；不同域名可配置不同证书/客户端 CA，不允许使用管理域名 |
 | 自动信任 | 不默认继承旧 E5 root 注册表；远端重新安装并经本机批准后才可管理 |
 | 主机操作 | root-owned 策略、明确 unit、非 root 业务用户、拒绝 unit 别名/可写 drop-in；无任意 shell、无通配 systemctl |
@@ -39,7 +40,7 @@
 3. 设置 `SG_DEPLOYMENT_MODE=remote`、`SG_SECURE_COOKIE=true`、实际的 `SG_PUBLIC_ORIGIN=https://管理域名`。不得设置 `SG_COOKIE_DOMAIN`。
 4. 重跑安装会生成 `/etc/servicegateway/policy.json`；在本机把 `management_host` 改为同一个真实域名。保持 `remote_mode=true`、`allow_public=false`、`include_legacy_registry=false`。预检不匹配时会停止，不会继续迁移数据库。
 5. 再运行安装，创建管理员。新系统只在本机可访问，不会因为安装成功而暴露公网。
-6. 配置管理专用域名的 HTTPS 入口，优先放在 VPN/受限网络。需要直接外部访问时，由 root policy 的 `management_*` 设置生成固定的管理虚拟主机：受信服务器证书 + 客户端证书校验 + 客户端 CA 撤销列表 + 管理来源 IP 白名单，再保留应用密码登录。
+6. 配置管理专用域名的 HTTPS 入口，优先放在 VPN/受限网络。需要直接外部访问时，由 root policy 的 `management_*` 设置生成固定的管理虚拟主机：受信服务器证书 + 客户端证书校验 + 客户端 CA 撤销列表 + 应用密码登录，默认不限制管理出口 IP；固定来源场景可以额外开启管理 IP 白名单。
 7. 示例中的管理域名和网段是占位符，不是实际配置。证书、CA、CRL、权限、域名和安全组尚未配置时，不应开放 443。不能把内部 :19092 或 :19093 直接做公网端口映射。同一 edge 必须是 80/443 的唯一所有者；安装器不强制停止冲突的系统 Nginx。
 8. 每个业务在远端以专用非 root 用户安装、仅监听 loopback，验证健康地址后用 `sgctl approve` 批准真实 manifest。配置新路由并逐个验收，最后再逐项切换客户端地址。
 

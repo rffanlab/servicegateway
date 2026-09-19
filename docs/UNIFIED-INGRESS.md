@@ -6,7 +6,7 @@
 客户端
   ├─ TCP 80  → 已登记域名返回 308 到 HTTPS；未知域名返回 404
   └─ TCP 443 → ServiceGateway edge（唯一监听者）
-                ├─ admin.example.com → 管理台：mTLS + 来源白名单 + 密码登录
+                ├─ admin.example.com → 管理台：mTLS + 密码登录（来源白名单可选）
                 ├─ api.example.com   → API 业务：TLS + 路由限定 Key
                 └─ app.example.com   → 网页业务：TLS + mTLS
 
@@ -33,7 +33,8 @@
   "management_host": "admin.example.com",
   "management_certificate": "admin",
   "management_client_ca": "admin-ca",
-  "management_allow_cidrs": ["127.0.0.1/32", "192.0.2.10/32"],
+  "management_ip_filter": false,
+  "management_allow_cidrs": [],
   "allowed_cidrs": ["127.0.0.1/32", "192.0.2.10/32"],
   "allow_public": false,
   "include_legacy_registry": false,
@@ -41,7 +42,7 @@
 }
 ```
 
-**域名和 `192.0.2.10/32` 是示例，不是可照抄的生产来源。** 保留已有 `services` 授权，不要整体覆盖真实策略。`management_allow_cidrs` 独立于业务 `allowed_cidrs`，业务范围扩大不能顺带扩大管理访问。测试阶段可保持 `listen_address=127.0.0.1`；明确对外提供服务时才改为 `0.0.0.0`。
+**域名和 `192.0.2.10/32` 是示例，不是可照抄的生产来源。** 保留已有 `services` 授权，不要整体覆盖真实策略。管理默认不绑定出口 IP：`management_ip_filter=false`、`management_allow_cidrs=[]`，mTLS 与密码仍强制。固定来源场景可显式设 `management_ip_filter=true` 并填写非空窄范围白名单。旧配置缺少开关时保留原白名单行为。管理策略独立于业务 `allowed_cidrs`。测试阶段可保持 `listen_address=127.0.0.1`；明确对外提供服务时才改为 `0.0.0.0`。
 
 `SG_PUBLIC_ORIGIN` 必须是同一个管理域名的标准 HTTPS 来源，不包含 8443、19091 等额外端口，不设置 Cookie Domain。证书和 CA 文件安装位置、权限、CRL 与探测证书要求见 REMOTE-SECURITY.md。root CA 签名私钥不能上传网关。
 

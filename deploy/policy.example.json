@@ -14,8 +14,7 @@
   "ingress_enabled": false,
   "management_certificate": "admin",
   "management_client_ca": "admin-ca",
-  "management_allow_cidrs": [
-    "127.0.0.1/32"
-  ],
-  "acme_enabled": false
+  "management_allow_cidrs": [],
+  "acme_enabled": false,
+  "management_ip_filter": false
 }

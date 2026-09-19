@@ -20,18 +20,18 @@
 
 ## 默认安全边界
 
-**对外仅 TCP 80/443，由 ServiceGateway 的同一个 Nginx edge 实例统一管理。80 只跳转已登记域名到 HTTPS，443 按 SNI/域名分别转发管理台和业务。** 管理 API `127.0.0.1:19092`、状态端口 `127.0.0.1:19093` 不对外开放。不再创建 19091 控制台入口或 191xx 业务入口。初始 `ingress_enabled=false`，不会在证书与来源限制准备前开监听。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
+**对外仅 TCP 80/443，由 ServiceGateway 的同一个 Nginx edge 实例统一管理。80 只跳转已登记域名到 HTTPS，443 按 SNI/域名分别转发管理台和业务。** 管理 API `127.0.0.1:19092`、状态端口 `127.0.0.1:19093` 不对外开放。不再创建 19091 控制台入口或 191xx 业务入口。初始 `ingress_enabled=false`，不会在证书与认证策略准备前开监听。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
 
-远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与来源白名单，仍保留应用密码登录。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
+远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与应用密码登录，默认不绑定管理电脑的出口 IP；固定来源场景可额外启用 IP 白名单。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
 
 Web 用户不能写 root policy、systemd unit、sudoers 或 Nginx 日志目录。服务在目标主机安装并经本机管理员批准后才能登记/控制；不自动继承旧 E5 主机授权。不允许控制网关自身、SSH、MySQL 或系统 Nginx。
 
 ## 完整部署（含 Nginx / MySQL / Let's Encrypt）
 
-Ubuntu Server 24.04 新服务器使用 `deploy/full-deploy.sh`；原 `deploy/install.sh` 继续用于仅应用升级。先设置管理域名 A 记录、放行 HTTP-01 所需 TCP 80，并保留 SSH 救援。以下域名、邮箱、IP 都是需要替换的示例：
+Ubuntu Server 24.04 新服务器使用 `deploy/full-deploy.sh`；原 `deploy/install.sh` 继续用于仅应用升级。先设置管理域名 A 记录、放行 HTTP-01 所需 TCP 80，并保留 SSH 救援。以下域名、邮箱都是需要替换的示例：
 
 ```bash
-sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --admin-cidr 203.0.113.10/32 --agree-tos
+sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --agree-tos
 ```
 
 脚本安装依赖、创建 MySQL schema/独立迁移与运行账号、申请管理服务器证书、生成管理客户端 p12/加密 CA 恢复包、初始化管理员并启用统一 80/443。Let's Encrypt 每日两次自动检查续期；管理客户端 CA 的 CRL 需持离线口令的人通过 `pki-refresh` 定期维护。现有端口/未知数据库冲突会拒绝覆盖；不修改 SSH、防火墙或云安全组。先用 `bash deploy/full-deploy.sh --dry-run` 查看计划，细节和首次登录见[完整部署说明](docs/FULL-DEPLOYMENT.md)。
