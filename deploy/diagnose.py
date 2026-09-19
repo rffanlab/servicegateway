@@ -17,7 +17,9 @@ from urllib.parse import unquote
 
 UNITS = ('servicegateway-edge.service', 'servicegateway-agent.service', 'servicegateway.service')
 CFG = Path('/etc/servicegateway')
-REPORTS = Path('/var/log/servicegateway-deploy')
+# /var/log may legitimately be group-writable on Ubuntu. Do not chmod it or
+# weaken the ancestor checks. Store private reports in our protected config tree.
+REPORTS = CFG / 'deploy-reports'
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'SYSTEMD_COLORS': '0'}
 
 
@@ -96,7 +98,11 @@ def report() -> str:
     for unit in UNITS:
         parts += [f'\n## {unit}', capture(['/usr/bin/systemctl', 'show', unit,
                    '--property=LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,FragmentPath']),
-                  capture(['/usr/bin/journalctl', '-b', '-u', unit, '-n', '100', '--no-pager', '-o', 'cat'])]
+                  capture(['/usr/bin/journalctl', '-b', '-u', unit, '-n', '100', '--no-pager', '-o', 'short-iso-precise'])]
+    for executable in runtime_paths():
+        parts += [f'\n## runtime permissions: {executable}',
+                  capture(['/usr/bin/namei', '-l', str(executable)]),
+                  capture(['/usr/bin/findmnt', '-n', '-o', 'TARGET,OPTIONS', '-T', str(executable)])]
     parts += ['\n## nginx build', capture(['/usr/sbin/nginx', '-V'])]
     path = Path('/srv/e5-logs/servicegateway/edge-error.log')
     try:
@@ -108,6 +114,47 @@ def report() -> str:
     return redact('\n'.join(parts), local_secrets())
 
 
+def runtime_paths():
+    base = Path('/srv/e5-apps/servicegateway')
+    current = base / 'current'
+    paths = [current / '.venv/bin/python', current / '.venv/bin/uvicorn']
+    if not current.exists():
+        # Rollback removes current, but leaves the failed release for diagnosis.
+        try:
+            releases = sorted(p for p in (base / 'releases').iterdir()
+                              if re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}', p.name)
+                              and not p.is_symlink() and p.is_dir())
+            if releases:
+                paths += [releases[-1] / '.venv/bin/python', releases[-1] / '.venv/bin/uvicorn']
+        except OSError:
+            pass
+    return paths
+
+
+def save_report(output):
+    # Validate ancestors BEFORE creating anything. A symlink/group-writable
+    # config tree is not repaired by changing its permissions from a diagnostic.
+    for parent in (REPORTS.parent, *REPORTS.parent.parents):
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError(f'Refusing unsafe diagnostic parent: {parent}')
+    REPORTS.mkdir(mode=0o700, exist_ok=True)
+    info = REPORTS.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError('Diagnostic report directory must be root-owned mode 0700')
+    fd, name = tempfile.mkstemp(prefix=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-'),
+                                suffix='.txt', dir=REPORTS)
+    with os.fdopen(fd, 'w') as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(output); stream.flush(); os.fsync(stream.fileno())
+    directory = os.open(REPORTS, os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return Path(name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--save', action='store_true', help='save a private report and print its location only')
@@ -117,16 +164,13 @@ def main():
     output = report() + '\n'
     if not args.save:
         print(output, end=''); return
-    REPORTS.mkdir(mode=0o700, exist_ok=True)
-    for parent in (REPORTS, *REPORTS.parents):
-        info = parent.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-            raise SystemExit('Refusing unsafe diagnostic output directory')
-    fd, name = tempfile.mkstemp(prefix=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-'),
-                                suffix='.txt', dir=REPORTS)
-    with os.fdopen(fd, 'w') as stream:
-        stream.write(output); stream.flush(); os.fsync(stream.fileno())
-    print(f'回滚前诊断已保存（root-only，已过滤常见凭据）：{name}')
+    try:
+        path = save_report(output)
+    except (OSError, ValueError) as exc:
+        # Never discard the original failure evidence merely because saving failed.
+        print(output, end='')
+        raise SystemExit(f'诊断保存失败（{type(exc).__name__}），脱敏结果已输出；请保留本机 journal。') from None
+    print(f'回滚前诊断已保存（root-only，已过滤常见凭据）：{path}')
     print('需要查看：sudo python3 -I deploy/diagnose.py（分享前仍请检查内容）')
 
 
