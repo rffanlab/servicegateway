@@ -112,7 +112,7 @@ def parser():
     p.add_argument('action', choices=['install', 'certificate', 'renew-test', 'pki-refresh', 'status'], nargs='?', default='install')
     p.add_argument('--domain', type=domain, help='管理域名；certificate 操作为新增业务证书的域名')
     p.add_argument('--email', help='Let\'s Encrypt 账户邮箱')
-    p.add_argument('--admin-cidr', action='append', type=cidr, default=[], help='你的管理出口 IP/32，可重复')
+    p.add_argument('--admin-cidr', action='append', type=cidr, default=[], help='可选：固定出口时额外限制 IPv4/CIDR，可重复；动态 IP 请省略')
     p.add_argument('--admin-user', default='rffanlab')
     p.add_argument('--certificate-id', default=None, help='新增业务证书 ID，如 harness')
     p.add_argument('--agree-tos', action='store_true', help='同意 Let\'s Encrypt 服务条款并允许向 CA 提交域名/邮箱')
@@ -130,8 +130,8 @@ def validate_args(args, saved=None):
         args.domain = args.domain or saved.get('domain')
         args.email = args.email or saved.get('email')
         args.admin_cidr = args.admin_cidr or saved.get('admin_cidrs', [])
-        if not args.domain or not args.email or not args.admin_cidr:
-            raise Stop('首次部署必须提供 --domain、--email 和 --admin-cidr；先把域名 A 记录指向服务器。')
+        if not args.domain or not args.email:
+            raise Stop('首次部署必须提供 --domain 和 --email；先把域名 A 记录指向服务器。动态出口无需 --admin-cidr。')
         if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', args.admin_user):
             raise Stop('无效管理员名称')
         if saved and (args.domain != saved['domain'] or sorted(args.admin_cidr) != sorted(saved['admin_cidrs'])
@@ -160,6 +160,7 @@ def plan(args):
           '6. 启用唯一 80/443 入口；安装每日两次的自动续期定时器。\n'
           '7. 验收、输出文件位置；不修改 SSH/防火墙/云安全组，不删除旧数据。')
     print(f'操作: {args.action}; 域名: {args.domain or "已保存配置"}')
+    print('新安装默认使用 mTLS 客户端证书 + 账号密码，不绑定出口 IP；--admin-cidr 仅为可选附加限制。')
 
 
 def dns_check(host):
@@ -274,7 +275,9 @@ def setup_database(args, saved):
             write(path, f'SG_DATABASE_URL=mysql+pymysql://{user}:{saved[key]}@127.0.0.1:3306/servicegateway?charset=utf8mb4\n' + common)
     if not (CFG / 'policy.json').exists():
         policy = json.loads((ROOT / 'deploy/policy.example.json').read_text())
-        policy.update(management_host=saved['domain'], management_allow_cidrs=['127.0.0.1/32', *saved['admin_cidrs']],
+        policy.update(management_host=saved['domain'],
+                      management_ip_filter=bool(saved['admin_cidrs']),
+                      management_allow_cidrs=['127.0.0.1/32', *saved['admin_cidrs']] if saved['admin_cidrs'] else [],
                       listen_address='0.0.0.0', acme_enabled=True)
         write(CFG / 'policy.json', json.dumps(policy, indent=2) + '\n', 0o640)
     saved['database_created'] = True

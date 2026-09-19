@@ -70,7 +70,8 @@ def free_port():
 
 
 @pytest.fixture
-def unified_edge(tmp_path):
+def unified_edge(tmp_path, request):
+    options = getattr(request, 'param', {})
     nginx,openssl=shutil.which('nginx'),shutil.which('openssl')
     if not nginx or not openssl:pytest.skip('Requires Nginx and OpenSSL')
     def run(*args):
@@ -106,6 +107,8 @@ commonName = supplied
         run('req','-x509','-newkey','rsa:2048','-nodes','-days','2','-subj','/CN='+name,'-keyout',ca/'ca.key','-out',ca/'ca.pem')
         run('req','-new','-newkey','rsa:2048','-nodes','-subj','/CN='+name+'-client','-keyout',ca/'probe.key','-out',ca/'client.csr')
         run('ca','-batch','-config',config,'-in',ca/'client.csr','-out',ca/'probe.crt')
+        if name == 'admin-ca' and options.get('revoke_admin'):
+            run('ca', '-config', config, '-revoke', ca/'probe.crt')
         run('ca','-gencrl','-config',config,'-out',ca/'crl.pem')
     class Backend(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
@@ -113,14 +116,14 @@ commonName = supplied
             if self.path=='/internal/auth':
                 valid=self.headers.get('X-SG-Secret')==SECRET and self.headers.get('X-Gateway-Key')=='good'
                 self.send_response(204 if valid else 401);self.send_header('Content-Length','0');self.end_headers();return
-            data=json.dumps({'host':self.headers.get('Host'),'path':self.path,'cookie':self.headers.get('Cookie','')}).encode()
+            data=json.dumps({'host':self.headers.get('Host'),'path':self.path,'cookie':self.headers.get('Cookie',''),'forwarded_for':self.headers.get('X-Forwarded-For','')}).encode()
             self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
     backend=ThreadingHTTPServer(('127.0.0.1',0),Backend)
     threading.Thread(target=backend.serve_forever,daemon=True).start()
     api=route().model_dump();api['upstreams']=[{'port':backend.server_port}]
     web={**api,'id':'web','name':'web','host':'web.example.test','certificate':'web','auth':'mtls','client_ca':'web-ca'}
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=[RouteSpec(**api),RouteSpec(**web)])
-    acme_policy = {**policy(), 'acme_enabled': True}
+    acme_policy = {**policy(), 'acme_enabled': True, **options.get('policy', {})}
     conf=render(snap,acme_policy,snap.digest(),SECRET,backend.server_port)
     tls_port,http_port,status_port=free_port(),free_port(),free_port()
     import os, pwd
@@ -142,13 +145,18 @@ commonName = supplied
                 with socket.create_connection(('127.0.0.1',tls_port),timeout=.1):break
             except OSError:time.sleep(.05)
         else:pytest.fail('Nginx did not start')
-        def request(host,cert=None,path='/',plain=False,sni=None,headers=None):
+        def request(host,cert=None,path='/',plain=False,sni=None,headers=None,source=None):
             if plain:
                 conn=http.client.HTTPConnection('127.0.0.1',http_port,timeout=3)
             else:
                 ctx=ssl.create_default_context(cafile=str(trust_path))
                 if cert:ctx.load_cert_chain(str(tmp_path/cert/'probe.crt'),str(tmp_path/cert/'probe.key'))
-                conn=LoopbackTLS(sni or host,tls_port,context=ctx,timeout=3)
+                class SourceTLS(LoopbackTLS):
+                    def connect(self):
+                        self.sock = socket.create_connection(('127.0.0.1', self.port), self.timeout,
+                                                             source_address=(source, 0) if source else None)
+                        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+                conn=SourceTLS(sni or host,tls_port,context=ctx,timeout=3)
             try:
                 conn.request('GET',path,headers={'Host':host,**(headers or {})})
                 response=conn.getresponse();return response.status,dict(response.getheaders()),response.read()

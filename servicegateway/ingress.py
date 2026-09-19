@@ -20,14 +20,21 @@ def validate_ingress_policy(policy, inspect_files=True):
         raise ValueError("ingress_enabled must be a boolean")
     if type(policy.get("acme_enabled", False)) is not bool:
         raise ValueError("acme_enabled must be a boolean")
+    ip_filter = policy.get("management_ip_filter", True)  # Preserve legacy policies.
+    if type(ip_filter) is not bool:
+        raise ValueError("management_ip_filter must be a boolean")
+    cidrs = policy.get("management_allow_cidrs", [])
+    if not isinstance(cidrs, list) or any(not isinstance(c, str) for c in cidrs):
+        raise ValueError("management_allow_cidrs must be a list of IPv4 CIDRs")
+    if not ip_filter and cidrs:
+        raise ValueError("Clear management_allow_cidrs when explicitly disabling IP filtering")
     if not policy.get("ingress_enabled", False):
         return  # Empty staged gateway: no public listeners, no certificate requirement yet.
     host = policy.get("management_host", "")
     if not valid_host(host) or host.endswith(".invalid"):
         raise ValueError("Configure a real, exact management hostname before enabling ingress")
-    cidrs = policy.get("management_allow_cidrs", [])
-    if not cidrs or any(ipaddress.IPv4Network(c, strict=True).prefixlen == 0 for c in cidrs):
-        raise ValueError("Management requires an explicit source allowlist, not 0.0.0.0/0")
+    if ip_filter and (not cidrs or any(ipaddress.IPv4Network(c, strict=True).prefixlen == 0 for c in cidrs)):
+        raise ValueError("IP filtering requires a source allowlist; dynamic-IP access uses management_ip_filter=false")
     for name in ("management_certificate", "management_client_ca"):
         if not CERT_ID.fullmatch(policy.get(name, "")):
             raise ValueError(f"Invalid/missing {name}")
@@ -94,10 +101,12 @@ def render_frontdoor(snapshot, policy, digest, generation, admin_port):
         # No management URLs, cookies or query strings in data-plane access logs.
         '    access_log off;',
     ]
-    for cidr in policy['management_allow_cidrs']:
-        lines.append(f'    allow {cidr};')
+    # mTLS, CRL, application login and throttling remain mandatory in BOTH modes.
+    if policy.get('management_ip_filter', True):
+        for cidr in policy['management_allow_cidrs']:
+            lines.append(f'    allow {cidr};')
+        lines.append('    deny all;')
     lines += [
-        '    deny all;',
         '    location ^~ /internal/ { return 404; }',
         '    location = /_sg/ready {',
         '      if ($remote_addr != 127.0.0.1) { return 404; }',
