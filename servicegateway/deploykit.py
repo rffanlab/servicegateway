@@ -242,7 +242,12 @@ def init_pki(args, refresh=False):
     ca = CERTS / 'admin-ca'
     required = ('ca.pem', 'crl.pem', 'probe.crt', 'probe.key', 'browser.crt')
     if not refresh and ARCHIVE.exists() and (ACCESS / 'admin-browser.p12').exists() and all((ca / x).exists() for x in required):
-        print('管理 mTLS 已初始化；未重置 CA、客户端证书或口令。'); return
+        print('管理 mTLS 已初始化；未重置 CA、客户端证书或口令。')
+        from . import pki_maintenance as pki
+        if getattr(args, 'enable_auto', False):
+            pki.mirror_bundle()
+            if not pki.CREDENTIAL.exists(): pki.enable(args)
+        return
     mkdir(ACCESS); mkdir(ca)
     secret = password(args)
     # Signer and browser private keys only exist in tmpfs during this operation.
@@ -279,10 +284,15 @@ def init_pki(args, refresh=False):
         bytes_write(ACCESS / 'admin-browser.p12', p12)
         for name in required:
             bytes_write(ca / name, (directory / name).read_bytes())
+    from . import pki_maintenance as pki
+    if getattr(args, 'enable_auto', False) or pki.CREDENTIAL.exists() or pki.DOWNLOAD.exists():
+        pki.mirror_bundle()
+    if getattr(args, 'enable_auto', False) and not pki.CREDENTIAL.exists():
+        pki.enable(args, secret=secret)
     if refresh:
         AgentClient(settings().agent_socket).call('reload-tls')
     print(f'客户端证书：{ACCESS}/admin-browser.p12；加密 CA 恢复包：{ARCHIVE}。\n'
-          '签名私钥已从临时目录移除，仅在口令加密恢复包中保留。CRL 90 天有效，建议每月运行 pki-refresh。')
+          '签名私钥已从临时目录移除，仅在口令加密恢复包中保留。CRL 90 天有效；可使用 pki-auto-enable 启用自动刷新。')
 
 
 def activate():
@@ -318,7 +328,8 @@ def health_report():
     try:
         crl = x509.load_pem_x509_crl(root_file(CERTS / 'admin-ca/crl.pem').read_bytes())
         days = (crl.next_update_utc - datetime.now(UTC)).days
-        print(f'管理客户端 CRL: 剩余 {days} 天；使用 pki-refresh 提前刷新')
+        from .pki_maintenance import CREDENTIAL
+        print(f'管理客户端 CRL: 剩余 {days} 天；' + ('每日自动检查，不足30天刷新' if CREDENTIAL.exists() else '使用 pki-auto-enable 启用自动刷新'))
         if days < 30: problems.append('管理客户端 CRL 请运行 pki-refresh')
     except (OSError, ValueError): problems.append('管理客户端 CRL 无法读取')
     for name in ('browser', 'probe'):
@@ -366,10 +377,11 @@ def status():
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['init-admin','certificate','init-pki','pki-refresh','activate','renew','renew-test','sync-certificates','status'])
+    p.add_argument('action', choices=['init-admin','certificate','init-pki','pki-refresh','activate','renew','renew-test','sync-certificates','status','pki-auto-enable','pki-auto-refresh','stage-client-bundle'])
     p.add_argument('--domain'); p.add_argument('--certificate-id')
     p.add_argument('--agree-tos', action='store_true'); p.add_argument('--skip-acme-test', action='store_true')
     p.add_argument('--pki-pass-file', type=Path)
+    p.add_argument('--enable-auto', action='store_true', help='Enable root-only encrypted-credential CRL maintenance')
     args = p.parse_args()
     if os.geteuid() != 0: raise SystemExit('仅允许本机 root 执行')
     os.umask(0o077)
@@ -384,7 +396,16 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             yield
     with operation_lock():
-        if args.action == 'certificate': issue_certificate(args)
+        if args.action in ('pki-auto-enable','pki-auto-refresh','stage-client-bundle'):
+            from . import pki_maintenance as pki
+            if args.action == 'pki-auto-enable': pki.enable(args)
+            elif args.action == 'stage-client-bundle':
+                if (ACCESS / 'admin-browser.p12').exists(): pki.mirror_bundle()
+            else:
+                global PKI_TEMP
+                PKI_TEMP = Path('/run/servicegateway-pki-refresh')
+                pki.auto_refresh()
+        elif args.action == 'certificate': issue_certificate(args)
         elif args.action in ('init-pki','pki-refresh'): init_pki(args, args.action == 'pki-refresh')
         else: {'init-admin':init_admin,'activate':activate,'renew':renew,'renew-test':renew_test,
                'sync-certificates':sync_certificates,'status':status}[args.action]()

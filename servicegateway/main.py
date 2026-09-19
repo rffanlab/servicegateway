@@ -156,6 +156,8 @@ def create_app(settings=None, agent=None):
     app = FastAPI(title="ServiceGateway", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.engine, app.state.sessions, app.state.agent = engine, sessions, agent
     app.state.settings = settings
+    from .account import routes as account_routes
+    app.include_router(account_routes(sessions, agent, limiter, settings))
     from .boundary import install_boundary
     install_boundary(app, settings)
 
@@ -167,7 +169,7 @@ def create_app(settings=None, agent=None):
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         if request.url.path.startswith(("/api", "/internal")):
-            response.headers["Cache-Control"] = "no-store"
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.exception_handler(AgentError)
@@ -192,7 +194,7 @@ def create_app(settings=None, agent=None):
     def login(body: LoginBody, request: Request, response: Response):
         limiter.check(request.client.host if request.client else "unknown")
         with sessions.begin() as db:
-            user = db.scalar(select(User).where(User.username == body.username.lower()))
+            user = db.scalar(select(User).where(User.username == body.username.lower()).with_for_update())
             valid = verify(body.password, user.password_hash if user else DUMMY_HASH)
             if not valid or not user or not user.enabled:
                 audit(db, "anonymous", "login", "account", "failed")
@@ -269,20 +271,20 @@ def create_app(settings=None, agent=None):
                 actor = "key:" + key.id
             else:
                 actor = principal(request, db, "admin")[0].username
-            state = state_lock(db)
-            agent.call("service", spec=body.model_dump(), operation="status")
-            old = db.get(Service, body.id)
-            if old and old.spec == body.model_dump():
-                return {"id": body.id, "changed": False, "revision": state.revision}
-            if old:
-                old.spec = body.model_dump()
-            else:
-                db.add(Service(id=body.id, spec=body.model_dump()))
-            db.flush()
-            snapshot(db)
-            state.revision += 1
-            audit(db, actor, "service.register", body.id)
-            return {"id": body.id, "changed": True, "revision": state.revision}
+            from .registry import register as register_spec
+            return register_spec(db, body, agent, actor)
+
+    @app.post("/internal/registry/services")
+    def local_register(body: ServiceSpec, request: Request):
+        # The public ingress blocks /internal/. Trust actual TCP peer only; never XFF.
+        if not request.client or request.client.host not in ("127.0.0.1", "::1"):
+            raise HTTPException(403, "本机注册仅允许回环连接")
+        with sessions.begin() as db:
+            key = api_key(request, db)
+            if not key or body.id not in key.service_ids:
+                raise HTTPException(403, "需要包含该服务 ID 的有效注册 Key")
+            from .registry import register as register_spec
+            return register_spec(db, body, agent, "local-key:" + key.id)
 
     @app.delete("/api/registry/services/{service_id}")
     def unregister(service_id: str, request: Request):

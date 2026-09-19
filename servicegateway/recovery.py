@@ -43,12 +43,14 @@ def main():
     # become live merely because the machine/service restarts.
     if os.geteuid() != 0:
         raise SystemExit('Root required')
-    from . import certificates
-    if not JOURNAL.exists() and not certificates.JOURNAL.exists():
+    from . import certificates, pki_maintenance
+    if not JOURNAL.exists() and not certificates.JOURNAL.exists() and not pki_maintenance.JOURNAL.exists():
         return
     running = subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', 'servicegateway-edge.service'])
     if running.returncode == 0:
         raise SystemExit('Edge is active; recovery must run through the serialized broker')
+    if pki_maintenance.restore_pending():
+        pki_maintenance.finish()
     if certificates.restore_files():
         certificates.finish()
     if JOURNAL.exists():

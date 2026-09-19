@@ -24,6 +24,7 @@ from .ingress import validate_ingress_policy, check_frontdoor, probe_ready
 
 CONFIG = Path("/etc/servicegateway/nginx.conf")
 CERTS = Path("/etc/servicegateway/certs")
+ACCESS_LOG = Path("/srv/e5-logs/servicegateway/edge-access.log")
 PROTECTED = {"servicegateway.service", "servicegateway-agent.service", "servicegateway-edge.service", "nginx.service", "mysql.service", "ssh.service", "sshd.service"}
 
 
@@ -198,7 +199,11 @@ class Broker:
     def recover_interrupted(self):
         from . import recovery
         with self.lock:
-            from . import certificates
+            from . import certificates, pki_maintenance
+            if pki_maintenance.restore_pending():
+                command(["/usr/sbin/nginx", "-t", "-c", str(CONFIG)])
+                command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
+                pki_maintenance.finish()
             if certificates.restore_files():
                 command(["/usr/sbin/nginx", "-t", "-c", str(CONFIG)])
                 command(["/usr/bin/systemctl", "reload", "servicegateway-edge.service"])
@@ -232,7 +237,8 @@ class Broker:
     def apply(self, snapshot, expected, generation):
         with self.lock:
             from .certificates import JOURNAL as tls_journal
-            if tls_journal.exists():
+            from .pki_maintenance import JOURNAL as crl_journal
+            if tls_journal.exists() or crl_journal.exists():
                 raise ValueError("Certificate recovery must complete before publication")
             policy = load_policy(self.settings)
             validate_snapshot(snapshot, policy)
@@ -272,9 +278,16 @@ class Broker:
 
     def dispatch(self, req):
         action = req.get("action")
-        allowed = {"reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
+        allowed = {"pki-status": {"action"}, "client-bundle": {"action"}, "install-crl": {"action", "pem"}, "reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
         if action not in allowed or set(req) - allowed[action]:
             raise ValueError("Unsupported agent request")
+        if action in ("pki-status", "client-bundle", "install-crl"):
+            from . import pki_maintenance as pki
+            if action == "pki-status":
+                return pki.public_status()
+            if action == "client-bundle":
+                return pki.bundle_payload()
+            return pki.install_crl(self, req["pem"])
         if action in ("sync-certificates", "reload-tls"):
             from .certificates import sync
             return sync(self, force=action == "reload-tls")
@@ -291,12 +304,13 @@ class Broker:
             from . import recovery
             with self.lock:
                 from .certificates import JOURNAL as tls_journal
-                if recovery.pending() or tls_journal.exists():
+                from .pki_maintenance import JOURNAL as crl_journal
+                if recovery.pending() or tls_journal.exists() or crl_journal.exists():
                     raise ValueError("Publish recovery is pending; do not reconcile against an intermediate state")
                 identity = self.live_identity()
                 return {"running": bool(identity), "digest": identity.get("digest"), "generation": identity.get("generation")}
         if action == "traffic":
-            path = Path("/srv/e5-logs/servicegateway/edge-access.log")
+            path = ACCESS_LOG
             if not path.exists():
                 return {"sample": [], "sampled_bytes": 0}
             with root_file(path).open("rb") as stream:
@@ -389,7 +403,7 @@ class Handler(socketserver.StreamRequestHandler):
             if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n"):
                 raise ValueError("Request exceeds limit")
             request = json.loads(raw)
-            if request.get("action") in ("bootstrap-ingress", "sync-certificates", "reload-tls") and uid != 0:
+            if request.get("action") in ("bootstrap-ingress", "sync-certificates", "reload-tls", "install-crl") and uid != 0:
                 raise ValueError("Ingress/certificate maintenance is local-root-only")
             result = {"ok": True, "data": self.server.broker.dispatch(request)}
         except Exception as exc:
@@ -411,8 +425,12 @@ def main():
     root_file(settings.auth_secret_file)
     settings.auth_secret()
     path = Path(settings.agent_socket)
-    path.unlink(missing_ok=True)
     account = pwd.getpwnam("servicegateway")
+    parent = path.parent.lstat()
+    if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != 0 or parent.st_gid != account.pw_gid
+            or stat.S_IMODE(parent.st_mode) != 0o750):
+        raise SystemExit("Agent RuntimeDirectory must be root:servicegateway 0750; install the updated unit")
+    path.unlink(missing_ok=True)
     with Server(str(path), Handler) as server:
         os.chown(path, 0, account.pw_gid)
         os.chmod(path, 0o660)

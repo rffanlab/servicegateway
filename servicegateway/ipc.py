@@ -29,5 +29,7 @@ class AgentClient:
                 if not result.get("ok"):
                     raise AgentError(result.get("error", "Agent failed")[:500])
                 return result["data"]
+        except PermissionError as exc:
+            raise AgentError("Agent socket access denied: check /run/servicegateway-agent ownership root:servicegateway (0750) and agent.sock (0660); do not grant world access") from exc
         except (OSError, ValueError) as exc:
             raise AgentError(f"Agent unavailable: {type(exc).__name__}") from exc

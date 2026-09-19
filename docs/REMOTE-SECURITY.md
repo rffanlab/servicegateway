@@ -68,7 +68,7 @@ sudo systemd-run --quiet --wait --pty --collect -p EnvironmentFile=/etc/serviceg
 
 API 路由使用 `auth=api_key`、真实 HTTPS 域名、本机已安装证书 ID、至少 1 的 `rate_per_second`。使用 `X-Gateway-Key`，不要把令牌放在 URL、查询参数或截图里。模型厂商的业务 Authorization 头不被网关占用。
 
-浏览器业务使用 `auth=mtls`，必须有 `certificate` 和 `client_ca`。在浏览器/设备安装独立客户端证书。CA 签名私钥应离线保存，不能放在网关主机、代码仓库或数据库。主机只保存 CA 公钥证书、CRL，以及仅用于 loopback 发布探测的独立客户端证书/密钥。
+浏览器业务使用 `auth=mtls`，必须有 `certificate` 和 `client_ca`。在浏览器/设备安装独立客户端证书。自建业务 CA 的签名私钥应离线保存。管理 CA 的自动 CRL 模式则使用 root-only 加密恢复包和 systemd 主机加密凭据；签名时在私有临时目录解密，不交给 Web 进程。该模式授予本机 root 在线维护能力，不声称完全离线；见 OPERATIONS-UPGRADE.md。
 
 目录结构：
 
@@ -81,7 +81,7 @@ API 路由使用 `auth=api_key`、真实 HTTPS 域名、本机已安装证书 ID
 /etc/servicegateway/certs/<客户端CA-ID>/probe.key
 ```
 
-所有目录/文件 root 所有，不可被业务账户写入；私钥必须 `0600`。`probe.crt` 由该客户端 CA 签发，CA 签名密钥本身不部署。浏览器证书与 probe 证书必须不同，撤销某个浏览器证书不影响发布探测。更新 CRL/证书后重新发布并验证新 worker。TLS 会话票据和 mTLS 会话缓存关闭；已经建立的业务长连接仍不会自动踢下线，紧急撤销需管理员明确决定是否中断连接。
+所有目录/文件 root 所有，不可被业务账户写入；私钥必须 `0600`。`probe.crt` 由该客户端 CA 签发，管理 CA 签名材料只以加密恢复包存放；启用自动 CRL 后，本机 root 可通过受保护凭据解密。浏览器证书与 probe 证书必须不同，撤销某个浏览器证书不影响发布探测。更新 CRL/证书后重新发布并验证新 worker。TLS 会话票据和 mTLS 会话缓存关闭；已经建立的业务长连接仍不会自动踢下线，紧急撤销需管理员明确决定是否中断连接。
 
 mTLS 解决“谁可以连接”，不替代业务自己的权限、CSRF 和文件安全。渲染危险内容、执行代码或安装插件的服务仍应使用专用用户和受控目录。网关的单次连接限额不等于底层 AI 任务数限制，应由业务队列另外约束。
 

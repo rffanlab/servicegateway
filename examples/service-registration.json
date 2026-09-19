@@ -1,0 +1,12 @@
+{
+  "id": "demo-app",
+  "name": "示例业务（请替换为实际安装的服务）",
+  "description": "先安装业务并确认健康地址，再登记；不会自动创建公网路由。",
+  "services": ["demo-app.service"],
+  "url": "",
+  "port": 443,
+  "health_url": "http://127.0.0.1:18188/healthz",
+  "gpu": "CPU / API",
+  "accent": "cyan",
+  "warning": "停止或重启会中断当前任务。"
+}

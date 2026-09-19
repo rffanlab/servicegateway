@@ -14,6 +14,9 @@ from .security import ph
 def main():
     p = argparse.ArgumentParser(prog="sgctl")
     sub = p.add_subparsers(dest="command", required=True)
+    reg = sub.add_parser("register", help="Register a local business manifest; does not publish or start services")
+    reg.add_argument("manifest")
+    reg.add_argument("--approve", action="store_true", help="Explicitly approve installed loopback units first (root only)")
     a = sub.add_parser("admin", help="Create/reset administrator using hidden interactive password")
     a.add_argument("username")
     approve = sub.add_parser("approve", help="Root-only: approve an already installed service manifest")
@@ -24,7 +27,13 @@ def main():
     sub.add_parser("bootstrap-ingress", help="Root-only: activate approved 80/443 entry on an empty gateway")
     args = p.parse_args()
     settings = Settings()
-    if args.command == "bootstrap-ingress":
+    if args.command == "register":
+        from .local_registration import register_local
+        try:
+            register_local(args.manifest, args.approve)
+        except Exception as exc:
+            raise SystemExit("本机登记失败：" + type(exc).__name__ + "; 请检查 manifest、unit 授权、Agent 和数据库，未发布路由") from None
+    elif args.command == "bootstrap-ingress":
         if os.geteuid() != 0:
             raise SystemExit("Ingress bootstrap requires local root")
         from .ipc import AgentClient
@@ -51,21 +60,10 @@ def main():
     elif args.command == "approve":
         if os.geteuid() != 0:
             raise SystemExit("必须由本机 root 执行批准；Web API 无此权限")
-        from .agent import atomic_write, root_file, unit_info
-        spec = ServiceSpec.model_validate_json(Path(args.manifest).read_text())
-        for unit in spec.services:
-            unit_info(unit)
-        address, port = endpoint(spec.health_url)
-        if address != "127.0.0.1":
-            raise SystemExit("自动批准仅接受 loopback 健康目标；远端上游须本机审核 policy.json")
-        policy_path = root_file(settings.policy_file)
-        policy = json.loads(policy_path.read_text())
-        grant = {"units": spec.services, "upstreams": [f"{address}:{port}"], "health_url": spec.health_url}
-        if spec.id in policy.get("services", {}) and policy["services"][spec.id] != grant:
-            raise SystemExit("已有不同授权；拒绝静默覆盖，请本机审核")
-        policy.setdefault("services", {})[spec.id] = grant
-        atomic_write(policy_path, json.dumps(policy, ensure_ascii=False, indent=2) + "\n", 0o640)
-        print(f"已批准 {spec.id}；未安装、启动、注册或发布任何业务。")
+        from .local_registration import approve as approve_spec, read_manifest
+        spec = read_manifest(args.manifest)
+        approve_spec(spec, settings)
+        print(f"已批准 {spec.id}；可用 sgctl register 登记，不会启动业务。")
     elif args.command == "export-e5":
         from .agent import load_policy
         if args.overview_file:

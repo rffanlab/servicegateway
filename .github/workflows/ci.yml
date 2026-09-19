@@ -48,6 +48,8 @@ jobs:
         run: python tests/systemd_nginx_smoke.py
       - name: Verify non-root runtime with private bootstrap umask in real systemd
         run: sudo --preserve-env=GITHUB_ACTIONS,SG_DATABASE_URL /usr/bin/python3 tests/systemd_runtime_smoke.py
+      - name: Verify socket peer permissions and encrypted credentials in real systemd
+        run: sudo --preserve-env=GITHUB_ACTIONS "$(command -v python)" tests/systemd_ops_smoke.py
       - name: Run tests against MySQL and real Nginx
         run: pytest -v --junitxml=test-results.xml
       - name: Package reviewed source and test evidence

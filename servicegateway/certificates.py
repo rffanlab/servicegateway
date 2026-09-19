@@ -111,7 +111,8 @@ def sync(broker, force=False):
     from . import recovery
     from .agent import CERTS, CONFIG, root_file, atomic_write, command
     with broker.lock:
-        if recovery.pending() or JOURNAL.exists():
+        from .pki_maintenance import JOURNAL as crl_journal
+        if recovery.pending() or JOURNAL.exists() or crl_journal.exists():
             raise ValueError('Unrecovered publication/certificate transaction; restart Agent to restore before retrying')
         identity = broker.live_identity()
         if not identity:

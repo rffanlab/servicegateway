@@ -1,7 +1,8 @@
+import {serviceFromForm} from './service-form.js';
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 let me = null, view = 'overview', overview = null, editorSave = null, toastTimer;
-const titles = {overview:'运行总览',services:'服务管理',routes:'网关路由',releases:'发布与回滚',traffic:'访问采样',keys:'API 密钥',users:'用户与权限',audit:'操作审计'};
+const titles = {overview:'运行总览',services:'服务管理',routes:'网关路由',releases:'发布与回滚',traffic:'访问采样',keys:'API 密钥',users:'用户与权限',audit:'操作审计',account:'账户与证书'};
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 9000); }
 async function api(path, method='GET', body, retry=true) {
   const response = await fetch(path, {method, credentials:'same-origin', headers:{'Content-Type':'application/json', ...(me?.csrf ? {'X-CSRF-Token':me.csrf} : {})}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -22,7 +23,7 @@ function reauthenticate(){
   });
 }
 function showLogin(){ me = null; $('#login').hidden = false; $('#shell').hidden = true; }
-function showShell(){ $('#login').hidden = true; $('#shell').hidden = false; $('#identity').textContent = `${me.username} / ${me.role}`; const permitted = me.role === 'admin' ? Object.keys(titles) : me.role === 'operator' ? ['overview','services','routes','releases','traffic','audit'] : ['overview','services','routes','releases']; document.querySelectorAll('#nav button').forEach(b=>b.hidden=!permitted.includes(b.dataset.view)); }
+function showShell(){ $('#login').hidden = true; $('#shell').hidden = false; $('#identity').textContent = `${me.username} / ${me.role}`; const permitted = me.role === 'admin' ? Object.keys(titles) : me.role === 'operator' ? ['overview','services','routes','releases','traffic','audit','account'] : ['overview','services','routes','releases','account']; document.querySelectorAll('#nav button').forEach(b=>b.hidden=!permitted.includes(b.dataset.view)); }
 const admin = () => me?.role === 'admin';
 const operator = () => ['admin','operator'].includes(me?.role);
 const button = (text, action, id='', cls='') => `<button class="${cls}" data-action="${action}" data-id="${esc(id)}">${esc(text)}</button>`;
@@ -44,7 +45,7 @@ async function load(){
     const stats=[['登记服务',overview.assets.length,'以真实登记数据为准'],['运行中',overview.assets.filter(s=>s.state==='running').length,'systemd 进程状态'],['HTTP 健康',overview.assets.filter(s=>s.healthy===true).length,'独立健康探测'],['草稿路由',overview.routes.length,'发布后生效']];
     html=`<div class="stats">${stats.map(([t,n,d])=>`<div class="stat"><label>${t}</label><strong>${n}</strong><small>${d}</small></div>`).join('')}</div><div class="section-head"><h2>服务状态</h2>${admin()?button('导入 E5 服务','import'):''}</div>`+(overview.assets.length?serviceCards(overview.assets):empty('从现有 E5 服务开始','先导入旧 Manager 登记，或新增一个已获本机批准的服务。'));
   }else if(view==='services'){
-    html=`<div class="section-head"><h2>服务登记与生命周期</h2><div class="actions">${admin()?button('导入 E5','import')+button('新增服务','service-new','','primary'):''}</div></div><div class="filters"><input id="service-filter" placeholder="按名称、ID 或 unit 过滤" aria-label="过滤服务"></div><div id="service-list">${overview.assets.length?serviceCards(overview.assets):empty('暂无服务','登记不会安装程序或修改 systemd unit。')}</div>`;
+    html=`<div class="section-head"><h2>服务登记与生命周期</h2><div class="actions">${admin()?button('本机业务提交','local-submit')+button('导入 E5','import')+button('新增服务','service-new','','primary'):''}</div></div><div class="filters"><input id="service-filter" placeholder="按名称、ID 或 unit 过滤" aria-label="过滤服务"></div><div id="service-list">${overview.assets.length?serviceCards(overview.assets):empty('暂无服务','登记不会安装程序或修改 systemd unit。')}</div>`;
   }else if(view==='routes'){
     html=`<div class="section-head"><h2>路由草稿</h2><div class="actions">${admin()?button('预览并发布','preview')+button('新增路由','route-new','','primary'):''}</div></div>`+(overview.routes.length?table(['路由 / 服务','入口匹配','上游','鉴权 / 状态','操作'],overview.routes.map(r=>[`${esc(r.name)}<small class="row-note">${esc(r.id)} → ${esc(r.service_id)}</small>`,`<code>${r.certificate?'https':'http'}://${esc(r.host)}${r.listen_port===443?'':':'+r.listen_port}${esc(r.path)}</code>`,r.upstreams.map(u=>`<code>${esc(u.address)}:${u.port} ×${u.weight}</code>`).join('<br>'),badge(r.auth)+(r.enabled?badge('启用','good'):badge('停用'))+(r.rate_per_second?badge(r.rate_per_second+' r/s'):''),admin()?`<div class="actions">${button('编辑','route-edit',r.id)}${button('删除草稿','route-delete',r.id,'danger')}</div>`:'只读'])):empty('暂无路由','统一通过 HTTPS 443 按业务域名分流；80 仅跳转，不转发业务。'));
   }else if(view==='releases'){
@@ -59,6 +60,13 @@ async function load(){
   }else if(view==='audit'){
     const rows=await api('/api/audit');
     html=`<div class="section-head"><h2>最近 100 条审计记录</h2></div>`+table(['时间','操作者','动作','目标','结果','详情'],rows.map(a=>[esc(new Date(a.created_at).toLocaleString()),esc(a.actor),esc(a.action),`<code>${esc(a.target)}</code>`,badge(a.outcome,a.outcome==='failed'?'bad':''),esc(a.detail)]));
+  }else if(view==='account'){
+    const data=await api('/api/account/security');
+    html=`<div class="section-head"><h2>我的账户</h2></div><section class="panel"><h3>${esc(data.username)} · ${esc(data.role)}</h3><p class="hint">修改密码需校验当前密码。成功后所有登录会话失效，使用新密码重新登录；API Key 和客户端证书不会被改变。</p>${button('修改密码','password-change','','primary')}</section>`;
+    if(admin()) {
+      const p=data.pki??{};
+      html+=`<div class="section-head"><h2>管理客户端证书与 CRL</h2></div><section class="panel"><p>${badge(p.timer_active&&p.credential_configured?'自动刷新已启用':'自动刷新尚未就绪',p.timer_active&&p.credential_configured?'good':'warn')} ${badge('CRL 剩余 '+(p.crl_days_remaining??'未知')+' 天')}</p><p class="hint">每天检查，剩余不足 30 天刷新为 90 天。不自动吊销或更换正在使用的浏览器证书。最近任务：${esc(p.last_run?.outcome??'尚无记录')} ${esc(p.last_run?.at??'')}</p><p class="hint">旧安装首次启用需在服务器执行 <code>sudo bash deploy/full-deploy.sh pki-auto-enable</code> 并隐藏输入原 PKI 口令一次。签名凭据不存入 Web 配置或 MySQL。</p><p class="hint">下载的是口令加密的管理客户端 P12，仍需原 P12 保护口令才能导入，不是网站登录密码。此操作只对管理员开放并再次验证当前密码。新设备首次访问仍需先导入客户端证书；没有公开免登录下载地址。</p>${button('下载客户端证书','client-download','','primary')}</section>`;
+    }
   }else if(view==='traffic'){
     const data=await api('/api/traffic');
     html=`<div class="section-head"><h2>最近访问采样</h2></div><p class="hint">仅展示日志尾部最近 200 个完成请求，不是全量流量统计。长连接在结束后记录。不采集请求体、Cookie、密钥或查询参数。</p>`+(data.sample.length?table(['路由','状态码','耗时','响应字节','请求 ID'],data.sample.reverse().map(r=>[esc(r.route),badge(r.status,r.status>=500?'bad':r.status<400?'good':'warn'),esc(r.seconds)+' s',esc(r.bytes),`<code>${esc(r.request_id)}</code>`])):empty('暂无访问采样','发布路由并完成一次访问后，这里会出现真实记录。'));
@@ -66,7 +74,39 @@ async function load(){
   $('#content').innerHTML=html;
   $('#service-filter')?.addEventListener('input',e=>{const q=e.target.value.toLowerCase(); $('#service-list').innerHTML=serviceCards(overview.assets.filter(s=>[s.name,s.id,...s.services].join(' ').toLowerCase().includes(q)));});
 }
-function serviceEditor(id){ const old=overview.assets.find(s=>s.id===id); const s=old??{id:'',name:'',description:'',services:[],url:'',port:443,health_url:'http://127.0.0.1:18188/healthz',gpu:'CPU / API',accent:'cyan',warning:'停止或重启会中断当前任务。'}; const spec=Object.fromEntries(['id','name','description','services','url','port','health_url','gpu','accent','warning'].map(k=>[k,s[k]])); edit(id?'编辑服务登记':'新增服务登记',`<p class="hint full">远程机上的服务必须先由本机 root 批准。旧 E5 清单仅用于导入资料，不自动继承主机授权。</p>`+field('spec','服务登记 JSON',JSON.stringify(spec,null,2),'textarea',{rows:18}),async f=>{await api('/api/registry/services','POST',JSON.parse(f.get('spec')));}); }
+function unitRow(value='') { return `<div class="unit-row"><input name="unit" value="${esc(value)}" placeholder="例如 my-app.service" required maxlength="108" aria-label="systemd 服务名称"><button type="button" data-remove-unit>移除</button></div>`; }
+async function serviceEditor(id){
+  const inv=await api('/api/inventory');
+  const old=overview.assets.find(x=>x.id===id);
+  const s=old??{id:'',name:'',description:'',services:[''],url:'',port:443,health_url:'http://127.0.0.1:18188/healthz',gpu:'CPU / API',accent:'cyan',warning:'停止或重启会中断当前任务。'};
+  const grants=inv.grants??{};
+  const choices=Object.keys(grants).map(key=>[key,key]);
+  const fields=`<p class="hint full">登记不会安装程序、启停业务或发布公网路由。unit 与健康地址必须经过本机 root 批准；也可使用“本机业务提交”一次批准并登记。</p>`
+    +(!old?field('approved','从已批准服务填入（可选）','','select',[['','手动填写'],...choices]):'')
+    +field('id','服务 ID（小写字母、数字、连字符）',s.id)+field('name','显示名称',s.name)
+    +field('description','服务说明',s.description)+field('url','业务访问 URL（可留空）',s.url)
+    +field('port','展示入口端口（不是自动开放端口）',s.port,'number')+field('health_url','已批准的本机健康检查 URL',s.health_url)
+    +`<div class="full"><label>systemd 服务（按依赖顺序填写，先启动的放前面）</label><div id="unit-fields">${s.services.map(unitRow).join('')}</div><button type="button" id="add-unit">增加一个服务</button></div>`
+    +field('gpu','运行资源说明',s.gpu)+field('accent','标识颜色',s.accent,'select',[['cyan','青色'],['violet','紫色'],['amber','橙色'],['rose','红色']])
+    +field('warning','停止/重启风险提示',s.warning);
+  edit(old?'编辑服务':'新增服务',fields,async form=>{
+    const data=serviceFromForm(form,old?.id);
+    if(!grants[data.id])throw new Error('该服务尚未获得本机批准。请先用 sgctl register --approve 提交，或用 sgctl approve 批准 manifest。');
+    await api('/api/registry/services','POST',data);
+  });
+  const form=$('#editor-form');
+  if(old)form.elements.namedItem('id').readOnly=true;
+  $('#add-unit').onclick=()=>{if(form.querySelectorAll('[name="unit"]').length>=16){toast('最多 16 个 unit');return;}$('#unit-fields').insertAdjacentHTML('beforeend',unitRow());};
+  $('#unit-fields').onclick=e=>{if(e.target.closest('[data-remove-unit]'))e.target.closest('.unit-row').remove();};
+  const approved=form.elements.namedItem('approved');
+  if(approved)approved.onchange=()=>{const grant=grants[approved.value];if(!grant)return;form.elements.namedItem('id').value=approved.value;form.elements.namedItem('health_url').value=grant.health_url;$('#unit-fields').innerHTML=grant.units.map(unitRow).join('');};
+}
+async function downloadClientCertificate(password){
+  const response=await fetch('/api/account/client-certificate',{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':me.csrf},body:JSON.stringify({current_password:password})});
+  if(!response.ok){const data=await response.json().catch(()=>({}));if(response.status===401)showLogin();throw new Error(typeof data.detail==='string'?data.detail:'证书下载失败');}
+  const blob=await response.blob();
+  const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='admin-browser.p12';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+}
 async function routeEditor(id){
   const policy=await api('/api/inventory');
   const remote=policy.remote_mode!==false;
@@ -76,9 +116,28 @@ async function routeEditor(id){
   edit(id?'编辑路由草稿':'新增路由草稿',fields,async f=>{const data={...r}; ['id','name','service_id','host','path','auth','balance'].forEach(k=>data[k]=f.get(k)); ['listen_port','timeout_seconds','max_body_mb','rate_per_second','burst','max_connections'].forEach(k=>data[k]=Number(f.get(k))); ['enabled','websocket','buffering','strip_prefix'].forEach(k=>data[k]=f.has(k)); data.upstreams=JSON.parse(f.get('upstreams'));data.certificate=f.get('certificate')||null;data.client_ca=f.get('client_ca')||null;data.session_users=f.get('session_users').split(',').map(x=>x.trim()).filter(Boolean);data.allow_cidrs=f.get('allow_cidrs').split(',').map(x=>x.trim()).filter(Boolean);if(old&&data.id!==old.id)throw new Error('编辑不能更改路由 ID');await api(`/api/routes/${encodeURIComponent(data.id)}?revision=${overview.revision}`,'PUT',data);});
 }
 async function perform(action,id){
+  if(action==='password-change'){
+    edit('修改我的密码',field('current_password','当前密码','','password').replace('new-password','current-password')+field('new_password','新密码（12–256 位）','','password')+field('confirm_password','确认新密码','','password'),async form=>{const result=await api('/api/account/password','POST',Object.fromEntries(form));$('#editor-form').reset();$('#editor').close();showLogin();toast(result.notice);return false;},'确认修改并退出登录');return;
+  }
+  if(action==='client-download'){
+    edit('验证密码后下载加密 P12',`<p class="hint full">只下载浏览器客户端证书，不含 CA 签名私钥或探测私钥。导入时仍需原 P12 保护口令；不要将文件上传公开站点。</p>`+field('current_password','当前网站登录密码','','password').replace('new-password','current-password'),async form=>{await downloadClientCertificate(form.get('current_password'));$('#editor-form').reset();});return;
+  }
+  if(action==='local-submit'){
+    read('本机业务提交',`方式一：本机管理员/部署 Agent
+先准备真实 manifest（仓库 examples/service-registration.json），然后执行：
+sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl register /实际路径/service-registration.json --approve
+
+只批准并登记已安装的非 root 业务，不执行 Shell、不发布公网路由。重复提交相同内容不会重复登记。
+
+方式二：普通业务进程自动登记
+管理员先批准该 manifest，再创建只包含该服务 ID 的“登记作用域”API Key，并保存为业务用户自己的 0600 文件。
+python3 deploy/register-local.py --manifest /实际路径/service-registration.json --key-file /安全路径/registration.key
+
+仅访问 127.0.0.1:19092/internal/registry/services；服务名必须在 Key 作用域和本机授权中。没有匿名本机免登录接口。`);return;
+  }
   if(['start','stop','restart','enable','disable'].includes(action)){const s=overview.assets.find(x=>x.id===id);if(['stop','restart','disable'].includes(action)&&!confirm(`${s.name}\n${s.warning}\n确认执行 ${action}？`))return; await api(`/api/services/${id}/actions`,'POST',{action,confirm:s.name});await load();return;}
   if(action==='check'){await api(`/api/services/${id}/health`,'POST');await load();return;}
-  if(action==='service-new'||action==='service-edit'){serviceEditor(id);return;}
+  if(action==='service-new'||action==='service-edit'){await serviceEditor(id);return;}
   if(action==='route-new'||action==='route-edit'){await routeEditor(id);return;}
   if(action==='service-delete'){if(confirm('仅注销管理登记，不停止程序、不删除数据。确认？')){await api(`/api/registry/services/${id}`,'DELETE');await load();}return;}
   if(action==='route-delete'){if(confirm('删除路由草稿？发布后才会停止此入口转发。')){await api(`/api/routes/${id}?revision=${overview.revision}`,'DELETE');await load();}return;}
@@ -100,3 +159,5 @@ $('#editor-form').addEventListener('submit',async e=>{e.preventDefault();if(!edi
 $('#close-editor').onclick=$('#cancel-editor').onclick=()=>$('#editor').close();
 api('/api/auth/me').then(data=>{me=data;showShell();return load();}).catch(()=>showLogin());
 setInterval(()=>{if(me&&!$('#editor').open&&view==='overview'&&document.visibilityState==='visible')load().catch(()=>{});},30000);
+
+$("#editor").addEventListener("close",()=>{if(!$("#editor").open){$("#editor-fields").replaceChildren();editorSave=null;}});
