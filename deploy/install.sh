@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# Secrets/backups remain private even when the caller has a permissive umask.
+umask 077
 # Run from a reviewed checkout. No curl|bash, package-manager changes or old E5 replacement.
 [[ $EUID -eq 0 ]] || { echo '请用 sudo bash deploy/install.sh'; exit 1; }
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -56,10 +58,21 @@ version=$(date -u +%Y%m%dT%H%M%SZ)-$(python3 -c 'import secrets;print(secrets.to
 release="$BASE/releases/$version"
 install -d -o root -g root -m 0755 "$BASE/releases" "$release"
 tar -C "$ROOT" --exclude=.git --exclude=.venv --exclude=.env --exclude='*.pem' --exclude='*.key' --exclude='*.p12' --exclude='*.sgpki' --exclude='*.sql' --exclude=__pycache__ --exclude=.pytest_cache --exclude='*.db' -cf - . | tar -C "$release" -xf -
-python3 -m venv "$release/.venv"
-"$release/.venv/bin/pip" install --disable-pip-version-check "$release"
+# The bootstrap parent uses umask 077 for credentials. Only code/venv creation
+# needs read/search/execute permission for the non-root runtime user.
+# Keep this a subshell: do NOT change the mask for credentials/backups below.
+# BEGIN RUNTIME BUILD
+(
+    umask 022
+    python3 -m venv "$release/.venv"
+    "$release/.venv/bin/python" -m pip install --disable-pip-version-check "$release"
+)
+# END RUNTIME BUILD
 chown -R root:root "$release"
 chmod -R go-w "$release"
+# tar may have restored a private checkout's top-level directory mode.
+# Only this new, code-only release directory is adjusted, never /srv or secrets.
+chmod 0755 "$release"
 # Root-only env files are parsed by systemd, not sourced/evaluated as shell.
 cd "$release"
 migration_env="$CFG/app.env"
@@ -90,6 +103,9 @@ rollback() {
     exit "$rc"
 }
 trap rollback ERR
+# Test the installed wheel and runtime credentials with the SAME unprivileged
+# user and filesystem sandbox before switching current or starting any service.
+systemd-run --quiet --wait --pipe --collect --unit="sg-runtime-check-$version" -p Type=oneshot -p User=servicegateway -p Group=servicegateway -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" -p ProtectSystem=strict -p ProtectHome=true -p PrivateTmp=true -p NoNewPrivileges=true -p UMask=0077 -p TimeoutStartSec=60 "$release/.venv/bin/python" -I -m servicegateway.runtimecheck
 changed=1
 ln -sfn "$release" "$BASE/current"
 for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service; do install -o root -g root -m 0644 "$release/deploy/$file" "/etc/systemd/system/$file"; done
@@ -102,7 +118,14 @@ systemctl start servicegateway-edge.service
 systemctl enable servicegateway-agent.service servicegateway.service
 systemctl restart servicegateway-agent.service servicegateway.service
 healthy=0
-for i in $(seq 1 30); do if curl -fsS --max-time 2 http://127.0.0.1:19092/readyz >/dev/null; then healthy=1; break; fi; sleep 1; done
+for i in $(seq 1 30); do
+    if curl -fsS --max-time 2 http://127.0.0.1:19092/readyz >/dev/null 2>&1; then healthy=1; break; fi
+    code=$(systemctl show servicegateway.service --property=ExecMainStatus --value)
+    case "$code" in
+        200|203|216|217|226) echo "管理 API 启动失败（systemd status=$code），停止空等并保存诊断。"; break ;;
+    esac
+    sleep 1
+done
 [[ $healthy -eq 1 ]]
 install -o root -g root -m 0644 "$release/deploy/logrotate.conf" /etc/logrotate.d/servicegateway
 bash "$release/deploy/verify.sh"

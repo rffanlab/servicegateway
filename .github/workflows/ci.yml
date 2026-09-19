@@ -30,7 +30,7 @@ jobs:
       - name: Install runtime and test dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nginx
+          sudo apt-get install -y nginx python3-venv
           python -m pip install -e '.[test]'
       - name: Validate MySQL migrations
         run: |
@@ -46,6 +46,8 @@ jobs:
           python deploy/bootstrap.py --dry-run
       - name: Verify fresh Nginx startup in a real systemd sandbox
         run: python tests/systemd_nginx_smoke.py
+      - name: Verify non-root runtime with private bootstrap umask in real systemd
+        run: sudo --preserve-env=GITHUB_ACTIONS,SG_DATABASE_URL /usr/bin/python3 tests/systemd_runtime_smoke.py
       - name: Run tests against MySQL and real Nginx
         run: pytest -v --junitxml=test-results.xml
       - name: Package reviewed source and test evidence

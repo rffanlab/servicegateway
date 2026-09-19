@@ -1,6 +1,7 @@
 """Production topology tests: one TLS listener, distinct SNI identities and no spare public ports."""
 import http.client
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import shutil
@@ -69,6 +70,28 @@ def free_port():
         sock.bind(('127.0.0.1',0));return sock.getsockname()[1]
 
 
+def remap_listeners(config, tls_port, http_port, status_port):
+    ports = {'443': tls_port, '80': http_port, '19093': status_port}
+    # Match the complete listen endpoint, not a prefix of an ephemeral upstream
+    # such as :44357, and never recursively replace an already-mapped port.
+    return re.sub(r'(\blisten[ \t]+127\.0\.0\.1:)(443|80|19093)(?=[\s;])',
+                  lambda match: match[1] + str(ports[match[2]]), config)
+
+
+@pytest.mark.parametrize('upstream_port', [44357, 443, 80, 8080, 19093])
+def test_listener_remap_never_changes_upstream_addresses(upstream_port):
+    conf = ('listen 127.0.0.1:443 ssl;\nlisten 127.0.0.1:80 default_server;\n'
+            'listen 127.0.0.1:19093;\n'
+            f'upstream x {{ server 127.0.0.1:{upstream_port}; }}\n'
+            f'proxy_pass http://127.0.0.1:{upstream_port}/internal/auth;\n')
+    actual = remap_listeners(conf, 44321, 8012, 31909)
+    assert 'listen 127.0.0.1:44321 ssl;' in actual
+    assert 'listen 127.0.0.1:8012 default_server;' in actual
+    assert 'listen 127.0.0.1:31909;' in actual
+    assert f'upstream x {{ server 127.0.0.1:{upstream_port}; }}' in actual
+    assert f'proxy_pass http://127.0.0.1:{upstream_port}/internal/auth;' in actual
+
+
 @pytest.fixture
 def unified_edge(tmp_path, request):
     options = getattr(request, 'param', {})
@@ -133,7 +156,7 @@ commonName = supplied
     (challenge/'test_token-123').write_text('public-acme-proof')
     (tmp_path/'private-secret').write_text('MUST-NOT-LEAK')
     (challenge/'link_token').symlink_to(tmp_path/'private-secret')
-    conf=conf.replace('127.0.0.1:443',f'127.0.0.1:{tls_port}').replace('127.0.0.1:80',f'127.0.0.1:{http_port}').replace('127.0.0.1:19093',f'127.0.0.1:{status_port}')
+    conf=remap_listeners(conf,tls_port,http_port,status_port)
     for directory in ('client','proxy'):(tmp_path/directory).mkdir()
     path=tmp_path/'nginx.conf';path.write_text(conf)
     checked=subprocess.run([nginx,'-t','-p',str(tmp_path),'-c',str(path)],capture_output=True,text=True)
