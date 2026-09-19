@@ -28,6 +28,9 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         "  access_log /srv/e5-logs/servicegateway/edge-access.log sg;",
         "  client_body_temp_path /var/lib/servicegateway/edge/client;",
         "  proxy_temp_path /var/lib/servicegateway/edge/proxy;",
+        "  fastcgi_temp_path /var/lib/servicegateway/edge/fastcgi;",
+        "  uwsgi_temp_path /var/lib/servicegateway/edge/uwsgi;",
+        "  scgi_temp_path /var/lib/servicegateway/edge/scgi;",
         "  server { listen 127.0.0.1:19093; access_log off;",
         f"    location = /_sg/ready {{ add_header X-SG-Generation {generation}; return 200 '{digest}'; }}",
         "    location / { return 404; }", "  }",
@@ -78,7 +81,6 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
         else:
-            # Verify client cert even on this internal probe. Readiness does not bypass mTLS.
             lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",
                       "      if ($ssl_client_verify != SUCCESS) { return 403; }",
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]

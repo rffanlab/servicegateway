@@ -9,6 +9,7 @@ PIDFile=/run/servicegateway-edge/nginx.pid
 RuntimeDirectory=servicegateway-edge
 RuntimeDirectoryMode=0755
 ExecStartPre=/srv/e5-apps/servicegateway/current/.venv/bin/python -I -m servicegateway.recovery
+ExecStartPre=/srv/e5-apps/servicegateway/current/.venv/bin/python -I -m servicegateway.startup
 ExecStartPre=/usr/sbin/nginx -t -c /etc/servicegateway/nginx.conf
 ExecStart=/usr/sbin/nginx -c /etc/servicegateway/nginx.conf
 ExecReload=/usr/sbin/nginx -s reload -c /etc/servicegateway/nginx.conf
