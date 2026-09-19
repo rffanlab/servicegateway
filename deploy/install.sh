@@ -82,7 +82,7 @@ systemd-run --quiet --wait --pipe --collect --unit="sg-migrate-$version" -p "Env
 migration_rc=$?
 set -e
 [[ $migration_rc -eq 0 ]] || { echo '数据库迁移失败；尚未切换运行版本'; exit 1; }
-for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service; do [[ ! -f "/etc/systemd/system/$file" ]] || cp -a "/etc/systemd/system/$file" "$WORK/$file"; done
+for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service servicegateway-pki-refresh.service servicegateway-pki-refresh.timer; do [[ ! -f "/etc/systemd/system/$file" ]] || cp -a "/etc/systemd/system/$file" "$WORK/$file"; done
 changed=0
 rollback() {
     rc=$?
@@ -94,7 +94,7 @@ rollback() {
         echo '部署验收失败，恢复原运行版本；不回退/删除数据库。'
         systemctl stop servicegateway.service servicegateway-agent.service || true
         if [[ -n "$old" ]]; then ln -sfn "$old" "$BASE/current"; else rm -f "$BASE/current"; fi
-        for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service; do
+        for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service servicegateway-pki-refresh.service servicegateway-pki-refresh.timer; do
             if [[ -f "$WORK/$file" ]]; then cp -a "$WORK/$file" "/etc/systemd/system/$file"; else systemctl disable --now "$file" || true; rm -f "/etc/systemd/system/$file"; fi
         done
         systemctl daemon-reload
@@ -108,8 +108,8 @@ trap rollback ERR
 systemd-run --quiet --wait --pipe --collect --unit="sg-runtime-check-$version" -p Type=oneshot -p User=servicegateway -p Group=servicegateway -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" -p ProtectSystem=strict -p ProtectHome=true -p PrivateTmp=true -p NoNewPrivileges=true -p UMask=0077 -p TimeoutStartSec=60 "$release/.venv/bin/python" -I -m servicegateway.runtimecheck
 changed=1
 ln -sfn "$release" "$BASE/current"
-for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service; do install -o root -g root -m 0644 "$release/deploy/$file" "/etc/systemd/system/$file"; done
-systemd-analyze verify /etc/systemd/system/servicegateway{,-agent,-edge}.service
+for file in servicegateway.service servicegateway-agent.service servicegateway-edge.service servicegateway-pki-refresh.service servicegateway-pki-refresh.timer; do install -o root -g root -m 0644 "$release/deploy/$file" "/etc/systemd/system/$file"; done
+systemd-analyze verify /etc/systemd/system/servicegateway{,-agent,-edge,-pki-refresh}.service /etc/systemd/system/servicegateway-pki-refresh.timer
 "$release/.venv/bin/sgctl" init-edge
 systemctl daemon-reload
 systemctl enable servicegateway-edge.service
@@ -128,6 +128,10 @@ for i in $(seq 1 30); do
 done
 [[ $healthy -eq 1 ]]
 install -o root -g root -m 0644 "$release/deploy/logrotate.conf" /etc/logrotate.d/servicegateway
+# Test socket access as the Web user, not root. /readyz alone never exercised IPC.
+systemd-run --quiet --wait --pipe --collect --unit="sg-agent-check-$version" -p Type=oneshot -p User=servicegateway -p Group=servicegateway -p "EnvironmentFile=$CFG/app.env" -p "WorkingDirectory=$release" -p ProtectSystem=strict -p ProtectHome=true -p PrivateTmp=true -p NoNewPrivileges=true "$release/.venv/bin/python" -I -m servicegateway.ipc_check
+"$release/.venv/bin/python" -I -m servicegateway.deploykit stage-client-bundle
+if [[ -f "$CFG/pki-auto/passphrase.cred" ]]; then systemctl enable --now servicegateway-pki-refresh.timer; fi
 bash "$release/deploy/verify.sh"
 trap - ERR
 echo '本机组件部署完成；未安装额外控制台监听器，未修改系统 Nginx。'

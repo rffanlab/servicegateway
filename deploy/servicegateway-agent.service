@@ -6,14 +6,13 @@ Wants=servicegateway-edge.service
 [Service]
 Type=simple
 User=root
-Group=root
+Group=servicegateway
 WorkingDirectory=/srv/e5-apps/servicegateway/current
 ExecStart=/srv/e5-apps/servicegateway/current/.venv/bin/python -I -m servicegateway.agent
 Restart=on-failure
 RestartSec=3
 RuntimeDirectory=servicegateway-agent
 RuntimeDirectoryMode=0750
-ExecStartPre=/usr/bin/chgrp servicegateway /run/servicegateway-agent
 UMask=0077
 NoNewPrivileges=true
 ProtectHome=true

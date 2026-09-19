@@ -34,7 +34,7 @@ Ubuntu Server 24.04 新服务器使用 `deploy/full-deploy.sh`；原 `deploy/ins
 sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@example.com --agree-tos
 ```
 
-脚本安装依赖、创建 MySQL schema/独立迁移与运行账号、申请管理服务器证书、生成管理客户端 p12/加密 CA 恢复包、初始化管理员并启用统一 80/443。Let's Encrypt 每日两次自动检查续期；管理客户端 CA 的 CRL 需持离线口令的人通过 `pki-refresh` 定期维护。现有端口/未知数据库冲突会拒绝覆盖；不修改 SSH、防火墙或云安全组。先用 `bash deploy/full-deploy.sh --dry-run` 查看计划，细节和首次登录见[完整部署说明](docs/FULL-DEPLOYMENT.md)。
+脚本安装依赖、创建 MySQL schema/独立迁移与运行账号、申请管理服务器证书、生成管理客户端 p12/加密 CA 恢复包、初始化管理员并启用统一 80/443。Let's Encrypt 每日两次自动检查续期；管理客户端 CRL 使用独立每日任务检查，不足 30 天自动刷新至 90 天；旧安装执行一次 `pki-auto-enable` 授权主机加密凭据。现有端口/未知数据库冲突会拒绝覆盖；不修改 SSH、防火墙或云安全组。先用 `bash deploy/full-deploy.sh --dry-run` 查看计划，细节和首次登录见[完整部署说明](docs/FULL-DEPLOYMENT.md)。
 
 ## 开始部署
 
@@ -51,6 +51,12 @@ cd servicegateway && sudo bash deploy/install.sh
 首次生成 root-only 环境模板并停止，随后配置独立本机 MySQL `servicegateway` 数据库、实际 HTTPS 管理域名和匹配的 root policy。没有默认管理员口令；CLI 交互创建管理员，不把密码放命令参数。安装器不修改 SSH、防火墙或云安全组，不迁移/删除业务数据。
 
 **安装成功不代表对外可用。** 证书、受限外部入口、业务审批和外部网络验收必须按部署规范完成；不要为了临时访问关闭 Secure Cookie 或把所有端口开放。
+
+## 后台与本机运维
+
+“账户与证书”支持所有用户修改自己的密码（成功后全部会话退出），管理员可校验当前密码后下载加密客户端 P12。服务新增是逐字段表单，支持多 unit 和已批准服务预填；本机部署可用 `sgctl register <manifest> --approve` 一次批准并登记，普通业务可用 `deploy/register-local.py` 加限定 Key 提交。
+
+Agent socket 固定 root:servicegateway 0750/0660，部署后以普通 Web 用户实际读取访问采样。CRL 自动维护不自动更换浏览器证书；它使用主机可解密的 root-only 凭据，不等于离线 CA。升级、一次授权、下载边界和本机登记示例见 [运维升级说明](docs/OPERATIONS-UPGRADE.md)。
 
 ## API 与状态
 

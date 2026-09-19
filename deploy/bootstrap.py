@@ -109,7 +109,7 @@ def cidr(value):
 
 def parser():
     p = argparse.ArgumentParser(description='完整部署：Ubuntu 24.04 + Nginx + MySQL + Let\'s Encrypt + ServiceGateway')
-    p.add_argument('action', choices=['install', 'certificate', 'renew-test', 'pki-refresh', 'status'], nargs='?', default='install')
+    p.add_argument('action', choices=['install', 'certificate', 'renew-test', 'pki-refresh', 'pki-auto-enable', 'status'], nargs='?', default='install')
     p.add_argument('--domain', type=domain, help='管理域名；certificate 操作为新增业务证书的域名')
     p.add_argument('--email', help='Let\'s Encrypt 账户邮箱')
     p.add_argument('--admin-cidr', action='append', type=cidr, default=[], help='可选：固定出口时额外限制 IPv4/CIDR，可重复；动态 IP 请省略')
@@ -139,7 +139,7 @@ def validate_args(args, saved=None):
             raise Stop('重跑不能静默更改管理域名、账号、邮箱或来源策略，请单独审核迁移。')
     if args.action in ('install', 'certificate') and not args.agree_tos:
         raise Stop('签发证书需显式添加 --agree-tos；没有该参数不会接受 CA 条款。')
-    if args.pki_pass_file and args.action in ('install', 'pki-refresh'):
+    if args.pki_pass_file and args.action in ('install', 'pki-refresh', 'pki-auto-enable'):
         owned(args.pki_pass_file, True)
     if args.email and not re.fullmatch(r'[A-Za-z0-9.!#$%&*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', args.email):
         raise Stop('邮箱格式无效')
@@ -335,8 +335,8 @@ def main(argv=None):
                 dns_check(args.domain)
                 runtime('certificate', '--domain', args.domain, '--certificate-id', args.certificate_id,
                         '--agree-tos', *(['--skip-acme-test'] if args.skip_acme_test else []))
-            elif args.action == 'pki-refresh':
-                runtime('pki-refresh', *(['--pki-pass-file', str(owned(args.pki_pass_file, True))] if args.pki_pass_file else []))
+            elif args.action in ('pki-refresh', 'pki-auto-enable'):
+                runtime(args.action, *(['--pki-pass-file', str(owned(args.pki_pass_file, True))] if args.pki_pass_file else []))
             else: runtime(args.action)
             return 0
         dns_check(args.domain)
@@ -367,7 +367,7 @@ def main(argv=None):
         runtime('init-admin')
         runtime('certificate', '--domain', saved['domain'], '--certificate-id', 'admin', '--agree-tos',
                 *(['--skip-acme-test'] if args.skip_acme_test else []))
-        runtime('init-pki', *(['--pki-pass-file', str(owned(args.pki_pass_file, True))] if args.pki_pass_file else []))
+        runtime('init-pki', '--enable-auto', *(['--pki-pass-file', str(owned(args.pki_pass_file, True))] if args.pki_pass_file else []))
         runtime('activate')
         install_timers()
         runtime('status')

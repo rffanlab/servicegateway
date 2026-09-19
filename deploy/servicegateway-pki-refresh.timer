@@ -1,0 +1,11 @@
+[Unit]
+Description=Check management CRL every day and refresh before expiry
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=servicegateway-pki-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -46,7 +46,7 @@ sudo bash deploy/full-deploy.sh install --domain admin.example.com --email you@e
 
 `mysql-admin.cnf` 必须 root 所有、0600，内容是标准 `[client]` / `password=...` 格式；不要把内容提交 Git 或发到聊天。脚本不支持交互式 `mysql -p`，也不把数据库密码放在进程参数中。
 
-PKI 初始化会隐藏输入一次口令（首次重复确认）：该口令保护浏览器 p12 和加密 CA 恢复包，至少 16 个字符。**请保存到密码管理器**，后续刷新 CRL 需要它。无人值守部署可使用 `--pki-pass-file /root/sg-pki-password`；文件同样必须 root-only 0600，部署后转移/清理这个明文口令文件，不应与恢复包长期同机保管。
+PKI 初始化会隐藏输入一次口令（首次重复确认）：该口令保护浏览器 p12 和加密 CA 恢复包，至少 16 个字符。**请保存到密码管理器**，原 P12 导入与恢复仍需要它；自动 CRL 任务通过本机加密凭据运行，不再每月手工输入。无人值守部署可使用 `--pki-pass-file /root/sg-pki-password`；文件同样必须 root-only 0600，部署后转移/清理这个明文口令文件，不应与恢复包长期同机保管。
 
 ## 3. 脚本执行的完整流程
 
@@ -85,7 +85,7 @@ PKI 初始化会隐藏输入一次口令（首次重复确认）：该口令保�
 
 打开 `https://你的管理域名/`，选择客户端证书，再用 `rffanlab` 和初始管理员密码登录。未导入证书看到拒绝访问是正常防护，不应因此取消 mTLS。不要把 p12、数据库口令、CA 恢复包放到网关 Webroot 或公开下载目录。
 
-重跑不会重置管理员密码。需要改口令时使用原有 `sgctl admin` 交互命令，成功后妥善清理不再有效的初始密码文件。CA 签名私钥在 tmpfs 工作目录使用后删除，长期只存在于口令保护的恢复包中；恢复包必须异地备份，口令丢失不能解密恢复。
+重跑不会重置管理员密码。登录后台“账户与证书”可自行改密和下载加密客户端证书；CLI `sgctl admin` 仍保留用于本机恢复。改密后妥善清理不再有效的初始密码文件。CA 签名私钥在 tmpfs 工作目录使用后删除，长期只存在于口令保护的恢复包中；恢复包必须异地备份，口令丢失不能解密恢复。
 
 ## 5. 后续新增业务证书
 
@@ -125,13 +125,19 @@ sudo journalctl -u servicegateway-renew.service -n 100 --no-pager
 
 续期不停止 443，不临时启动另一个 Web 服务器，不用 certbot --nginx 修改网关配置。部署钩子通过 root-only Unix socket 与发布操作串行执行。新增证书文件替换前保存 root-only 恢复记录，配置检查/重载失败时恢复旧文件；若通讯或恢复状态不确定则保留记录并拒绝继续发布，需要本机排查。Certbot 已签发但上次部署失败时，下一轮即使无需重新签发，也会重试同步。
 
-**Let's Encrypt 服务器证书与私有客户端身份不是同一种证书。** 管理客户端 CA 不向公网 CA 申请，也不会在线存放可直接使用的 CA 签名私钥。因此管理客户端 CRL 有效期 90 天，需要持恢复包口令的人定期维护；建议每月执行：
+**Let's Encrypt 服务器证书与私有客户端身份不是同一种证书。** 管理 CRL 新安装默认使用每日 systemd 任务，剩余不超过 30 天时刷新至 90 天；不会自动更换或吊销浏览器证书。已有安装执行一次：
 
 ```bash
-sudo bash deploy/full-deploy.sh pki-refresh
+sudo bash deploy/full-deploy.sh pki-auto-enable
 ```
 
-该命令解密恢复包到临时目录、刷新 CRL、重新加密保存，保留同一个 CA，重载 TLS。浏览器证书接近 30 天到期时会签发替换证书并吊销旧证书，此时须重新导入输出的 p12。探测证书为长期独立身份，不能拷贝给浏览器使用。维护服务在 CRL/客户端证书临近到期时返回非零并记 journal；尚未实现邮件/短信告警，需将这个 systemd 单元接入你自己的监控。不要假设 CA 会发邮件提醒。
+输入原 PKI 保护口令后，安装器使用 `systemd-creds` 生成 root-only 的主机加密凭据，任务通过 `LoadCredentialEncrypted` 使用。口令不交给 Web 进程，也不放命令行或 MySQL；但主机 root 拥有解密签名能力，不能再将该模式称为“完全离线 CA”。
+
+```bash
+sudo systemctl start servicegateway-pki-refresh.service && sudo systemctl list-timers servicegateway-pki-refresh.timer --all
+```
+
+详细升级、日志、恢复、账户下载和本机业务登记见 [OPERATIONS-UPGRADE.md](OPERATIONS-UPGRADE.md)。浏览器证书自己的到期时间独立于 CRL；有计划的手工 `pki-refresh` 仍保留，证书被替换后须重新下载/导入 P12。尚无邮件/短信告警，应监控任务失败。
 
 ## 7. 重跑、升级、失败与恢复
 
