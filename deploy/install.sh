@@ -46,7 +46,7 @@ for log in edge-access.log edge-error.log; do
 done
 # Nginx's master creates logs; workers need traverse/write access for temp files only.
 install -d -o root -g root -m 0755 /var/lib/servicegateway /var/lib/servicegateway/edge
-install -d -o www-data -g www-data -m 0700 /var/lib/servicegateway/edge/client /var/lib/servicegateway/edge/proxy
+install -d -o www-data -g www-data -m 0700 /var/lib/servicegateway/edge/client /var/lib/servicegateway/edge/proxy /var/lib/servicegateway/edge/fastcgi /var/lib/servicegateway/edge/uwsgi /var/lib/servicegateway/edge/scgi
 install -d -m 0750 "$CFG/certs"
 [[ -f "$CFG/policy.json" ]] || install -o root -g servicegateway -m 0640 "$ROOT/deploy/policy.example.json" "$CFG/policy.json"
 if [[ ! -f "$CFG/auth-secret" ]]; then python3 -c 'import secrets; print(secrets.token_hex(32))' > "$CFG/auth-secret"; fi
@@ -74,6 +74,9 @@ changed=0
 rollback() {
     rc=$?
     trap - ERR
+    set +e
+    # Capture the first failure before stopping services/removing their unit files.
+    python3 -I "$ROOT/deploy/diagnose.py" --save || echo '诊断采集失败；请保留本机 journal。'
     if [[ $changed -eq 1 ]]; then
         echo '部署验收失败，恢复原运行版本；不回退/删除数据库。'
         systemctl stop servicegateway.service servicegateway-agent.service || true
@@ -93,7 +96,9 @@ for file in servicegateway.service servicegateway-agent.service servicegateway-e
 systemd-analyze verify /etc/systemd/system/servicegateway{,-agent,-edge}.service
 "$release/.venv/bin/sgctl" init-edge
 systemctl daemon-reload
-systemctl enable --now servicegateway-edge.service
+systemctl enable servicegateway-edge.service
+# Check startup separately: enablement is not proof of a running edge.
+systemctl start servicegateway-edge.service
 systemctl enable servicegateway-agent.service servicegateway.service
 systemctl restart servicegateway-agent.service servicegateway.service
 healthy=0
