@@ -65,3 +65,33 @@ jobs:
             servicegateway-source.tar.gz
             test-results.xml
             test-environment.txt
+  business-databases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.0', '8.4']
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-password
+          MYSQL_DATABASE: servicegateway_test
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pci-only-password"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application test dependencies
+        run: python -m pip install -e '.[test]'
+      - name: Verify real schema creation and privilege isolation through local MySQL socket
+        run: sudo --preserve-env=GITHUB_ACTIONS "$(command -v python)" tests/mysql_database_smoke.py --container "${{ job.services.mysql.id }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mysql-business-databases-${{ matrix.mysql }}
+          path: database-mysql-evidence.json

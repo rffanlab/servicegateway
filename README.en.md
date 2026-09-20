@@ -41,3 +41,7 @@ All users can change their own password after verifying the current password; ev
 Services now have a structured form with repeatable systemd-unit fields. Local root deployment can run `sgctl register <manifest> --approve`; unprivileged local applications can use `deploy/register-local.py` with an exact-scoped key file against the loopback-only registration endpoint. Neither method starts services or publishes routes.
 
 The Agent unit declares `Group=servicegateway` rather than a temporary ExecStartPre chgrp. Deployment verifies actual non-root socket/traffic access, and CI tests group behavior across restarts. See [operations upgrade](docs/OPERATIONS-UPGRADE.md) for migration, schedules, safety boundaries and commands.
+
+## Business database provisioning
+
+Admins can create a new business schema from the UI or with `sgctl database-create` after a local root administrator explicitly runs `sgctl database-enable`. The constrained Agent uses a local MySQL socket; the Web runtime account gains no global privileges. Each approved service gets one `sgb_` schema and separate runtime (DML) / migration (DDL, including DROP on its own schema) accounts. Scoped registration/API keys cannot provision databases. Credential downloads require the current admin password and CSRF, and are not cached. Existing names are never taken over; partial DDL is retained for local review, not destructively rolled back. See [deployment and usage](docs/BUSINESS-DATABASES.md). MySQL 3306 remains private.

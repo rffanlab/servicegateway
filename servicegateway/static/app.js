@@ -1,8 +1,9 @@
+import {databaseUI} from './database-ui.js';
 import {serviceFromForm} from './service-form.js';
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 let me = null, view = 'overview', overview = null, editorSave = null, toastTimer;
-const titles = {overview:'运行总览',services:'服务管理',routes:'网关路由',releases:'发布与回滚',traffic:'访问采样',keys:'API 密钥',users:'用户与权限',audit:'操作审计',account:'账户与证书'};
+const titles = {databases:'业务数据库',overview:'运行总览',services:'服务管理',routes:'网关路由',releases:'发布与回滚',traffic:'访问采样',keys:'API 密钥',users:'用户与权限',audit:'操作审计',account:'账户与证书'};
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 9000); }
 async function api(path, method='GET', body, retry=true) {
   const response = await fetch(path, {method, credentials:'same-origin', headers:{'Content-Type':'application/json', ...(me?.csrf ? {'X-CSRF-Token':me.csrf} : {})}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -33,7 +34,8 @@ const table = (heads, rows) => `<div class="table-wrap"><table><thead><tr>${head
 function field(name, title, value='', type='text', opts){ const control = type==='textarea' ? `<textarea name="${name}" rows="${opts?.rows ?? 6}">${esc(value)}</textarea>` : type==='select' ? `<select name="${name}">${opts.map(([v,t])=>`<option value="${v}" ${v===String(value)?'selected':''}>${esc(t)}</option>`).join('')}</select>` : type==='checkbox' ? `<input name="${name}" type="checkbox" ${value?'checked':''}>` : `<input name="${name}" type="${type}" value="${esc(value)}" ${type==='password'?'autocomplete="new-password"':''}>`; return `<label class="${type==='textarea'?'full':''}">${esc(title)}${control}</label>`; }
 function edit(title, fields, save, label='保存'){ $('#editor-title').textContent=title; $('#editor-fields').innerHTML=fields; $('#save-editor').textContent=label; $('#save-editor').hidden=!save; $('#cancel-editor').textContent=save?'取消':'关闭'; editorSave=save; $('#editor').showModal(); }
 function read(title, text){ edit(title, `<pre class="readbox">${esc(text)}</pre>`, null); }
-function serviceCards(assets){ return `<div class="cards">${assets.map(s=>`<article class="card"><div class="card-head"><h3>${esc(s.name)}</h3>${badge(s.state,s.state==='running'?'good':['failed','stopped'].includes(s.state)?'bad':'warn')}</div><p>${esc(s.description || '暂无描述')}</p><div class="toolbar">${badge(s.healthy===true?'HTTP 健康':s.healthy===false?'HTTP 异常':'HTTP 未确认',s.healthy===true?'good':s.healthy===false?'bad':'warn')}${badge('自启 '+s.startup)}${s.latency_ms!==null?badge(s.latency_ms+' ms'):''}</div><div class="meta">${s.services.map(esc).join('<br>')}</div><p>${esc(s.gpu)} · ${s.checked_at ? esc(new Date(s.checked_at).toLocaleTimeString()) : '等待采集'}<br>${esc(s.detail)}</p><div class="card-actions">${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">打开原入口 ↗</a>`:''}${operator()?button('启动','start',s.id)+button('停止','stop',s.id)+button('重启','restart',s.id)+button('启用自启','enable',s.id)+button('禁止自启','disable',s.id)+button('检查','check',s.id):''}${admin()?button('编辑','service-edit',s.id)+button('注销','service-delete',s.id,'danger'):''}</div></article>`).join('')}</div>`; }
+function serviceCards(assets){ return `<div class="cards">${assets.map(s=>`<article class="card"><div class="card-head"><h3>${esc(s.name)}</h3>${badge(s.state,s.state==='running'?'good':['failed','stopped'].includes(s.state)?'bad':'warn')}</div><p>${esc(s.description || '暂无描述')}</p><div class="toolbar">${badge(s.healthy===true?'HTTP 健康':s.healthy===false?'HTTP 异常':'HTTP 未确认',s.healthy===true?'good':s.healthy===false?'bad':'warn')}${badge('自启 '+s.startup)}${s.latency_ms!==null?badge(s.latency_ms+' ms'):''}</div><div class="meta">${s.services.map(esc).join('<br>')}</div><p>${esc(s.gpu)} · ${s.checked_at ? esc(new Date(s.checked_at).toLocaleTimeString()) : '等待采集'}<br>${esc(s.detail)}</p><div class="card-actions">${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">打开原入口 ↗</a>`:''}${operator()?button('启动','start',s.id)+button('停止','stop',s.id)+button('重启','restart',s.id)+button('启用自启','enable',s.id)+button('禁止自启','disable',s.id)+button('检查','check',s.id):''}${admin()?button('编辑','service-edit',s.id)+button('建业务库','database-new',s.id)+button('注销','service-delete',s.id,'danger'):''}</div></article>`).join('')}</div>`; }
+const databases = databaseUI({api, edit, field, table, badge, button, empty, esc, getOverview:()=>overview, getUser:()=>me, showLogin});
 async function load(){
   if (!me) return;
   overview = await api('/api/overview');
@@ -44,6 +46,8 @@ async function load(){
   if(view==='overview'){
     const stats=[['登记服务',overview.assets.length,'以真实登记数据为准'],['运行中',overview.assets.filter(s=>s.state==='running').length,'systemd 进程状态'],['HTTP 健康',overview.assets.filter(s=>s.healthy===true).length,'独立健康探测'],['草稿路由',overview.routes.length,'发布后生效']];
     html=`<div class="stats">${stats.map(([t,n,d])=>`<div class="stat"><label>${t}</label><strong>${n}</strong><small>${d}</small></div>`).join('')}</div><div class="section-head"><h2>服务状态</h2>${admin()?button('导入 E5 服务','import'):''}</div>`+(overview.assets.length?serviceCards(overview.assets):empty('从现有 E5 服务开始','先导入旧 Manager 登记，或新增一个已获本机批准的服务。'));
+  }else if(view==='databases'){
+    html=await databases.render();
   }else if(view==='services'){
     html=`<div class="section-head"><h2>服务登记与生命周期</h2><div class="actions">${admin()?button('本机业务提交','local-submit')+button('导入 E5','import')+button('新增服务','service-new','','primary'):''}</div></div><div class="filters"><input id="service-filter" placeholder="按名称、ID 或 unit 过滤" aria-label="过滤服务"></div><div id="service-list">${overview.assets.length?serviceCards(overview.assets):empty('暂无服务','登记不会安装程序或修改 systemd unit。')}</div>`;
   }else if(view==='routes'){
@@ -116,6 +120,7 @@ async function routeEditor(id){
   edit(id?'编辑路由草稿':'新增路由草稿',fields,async f=>{const data={...r}; ['id','name','service_id','host','path','auth','balance'].forEach(k=>data[k]=f.get(k)); ['listen_port','timeout_seconds','max_body_mb','rate_per_second','burst','max_connections'].forEach(k=>data[k]=Number(f.get(k))); ['enabled','websocket','buffering','strip_prefix'].forEach(k=>data[k]=f.has(k)); data.upstreams=JSON.parse(f.get('upstreams'));data.certificate=f.get('certificate')||null;data.client_ca=f.get('client_ca')||null;data.session_users=f.get('session_users').split(',').map(x=>x.trim()).filter(Boolean);data.allow_cidrs=f.get('allow_cidrs').split(',').map(x=>x.trim()).filter(Boolean);if(old&&data.id!==old.id)throw new Error('编辑不能更改路由 ID');await api(`/api/routes/${encodeURIComponent(data.id)}?revision=${overview.revision}`,'PUT',data);});
 }
 async function perform(action,id){
+  if(await databases.perform(action,id))return;
   if(action==='password-change'){
     edit('修改我的密码',field('current_password','当前密码','','password').replace('new-password','current-password')+field('new_password','新密码（12–256 位）','','password')+field('confirm_password','确认新密码','','password'),async form=>{const result=await api('/api/account/password','POST',Object.fromEntries(form));$('#editor-form').reset();$('#editor').close();showLogin();toast(result.notice);return false;},'确认修改并退出登录');return;
   }
