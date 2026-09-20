@@ -278,9 +278,16 @@ class Broker:
 
     def dispatch(self, req):
         action = req.get("action")
-        allowed = {"pki-status": {"action"}, "client-bundle": {"action"}, "install-crl": {"action", "pem"}, "reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
+        allowed = {"database-status": {"action"}, "database-create": {"action", "spec"}, "database-credentials": {"action", "service_id", "account"}, "pki-status": {"action"}, "client-bundle": {"action"}, "install-crl": {"action", "pem"}, "reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
         if action not in allowed or set(req) - allowed[action]:
             raise ValueError("Unsupported agent request")
+        if action in ("database-status", "database-create", "database-credentials"):
+            from . import business_databases as databases
+            if action == "database-status":
+                return databases.status()
+            if action == "database-credentials":
+                return databases.credentials(req["service_id"], req["account"])
+            return databases.create(req["spec"], load_policy(self.settings))
         if action in ("pki-status", "client-bundle", "install-crl"):
             from . import pki_maintenance as pki
             if action == "pki-status":

@@ -25,7 +25,17 @@ def main():
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
     sub.add_parser("bootstrap-ingress", help="Root-only: activate approved 80/443 entry on an empty gateway")
+    from .database_cli import add_commands, run as database_command
+    add_commands(sub)
     args = p.parse_args()
+    if args.command.startswith("database-"):
+        try:
+            return database_command(args)
+        except Exception as exc:
+            from .business_databases import ProvisionError
+            from .ipc import AgentError
+            message = str(exc) if isinstance(exc, (ProvisionError, AgentError)) else type(exc).__name__
+            raise SystemExit("业务数据库操作未完成：" + message) from None
     settings = Settings()
     if args.command == "register":
         from .local_registration import register_local

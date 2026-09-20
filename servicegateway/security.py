@@ -61,7 +61,8 @@ def principal(request: Request, db, role="viewer", csrf=True):
     if csrf and request.method not in ("GET", "HEAD", "OPTIONS"):
         if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), session.csrf):
             raise HTTPException(403, "CSRF 校验失败，请刷新页面")
-    critical = (request.url.path.startswith(("/api/gateway/publish", "/api/gateway/rollback/", "/api/users", "/api/keys"))
+    critical = ((request.url.path == "/api/databases" and request.method == "POST")
+                or request.url.path.startswith(("/api/gateway/publish", "/api/gateway/rollback/", "/api/users", "/api/keys"))
                 or (request.url.path.startswith("/api/services/") and request.url.path.endswith("/actions"))
                 or (request.url.path.startswith("/api/registry/services/") and request.method == "DELETE"))
     if (critical and request.method not in ("GET", "HEAD", "OPTIONS")
