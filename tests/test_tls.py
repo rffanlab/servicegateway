@@ -62,14 +62,14 @@ commonName = supplied
         def log_message(self,*args):pass
         def do_GET(self):
             if self.path == '/internal/auth':
-                good=self.headers.get('X-Gateway-Key')=='valid-test-key'
+                good=(self.headers.get('X-SG-Client-Verify')=='SUCCESS' or self.headers.get('X-Gateway-Key')=='valid-test-key')
                 self.send_response(204 if good else 401);self.send_header('Content-Length','0');self.end_headers();return
             self.send_response(200);self.send_header('Content-Length','2');self.end_headers();self.wfile.write(b'OK')
     backend=ThreadingHTTPServer(('127.0.0.1',0),Backend)
     threading.Thread(target=backend.serve_forever,daemon=True).start()
     port,status=free_port(),free_port()
     mode=getattr(request,'param','valid')
-    auth='mtls_api_key' if mode=='combined' else 'mtls'
+    auth='mtls_or_api_key' if mode=='combined' else 'mtls'
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=[RouteSpec(id='tls-test',name='mTLS',service_id='demo',host='app.example.test',listen_port=port,auth=auth,certificate='srv',client_ca='ca',rate_per_second=10,upstreams=[{'port':backend.server_port}])])
     text=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,admin_port=backend.server_port)
     text=text.replace('user www-data;','').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('/etc/servicegateway/certs',str(tmp_path)).replace('127.0.0.1:19093',f'127.0.0.1:{status}')
@@ -114,7 +114,11 @@ def test_real_tls_rejects_revoked_certificate(tls_edge):
 
 
 @pytest.mark.parametrize('tls_edge',['combined'],indirect=True)
-def test_real_tls_and_api_key_are_both_required(tls_edge):
-    assert tls_edge(extra={'X-Gateway-Key':'valid-test-key'})[0] == 200
-    assert tls_edge()[0] == 401
-    assert tls_edge(client_cert=False, extra={'X-Gateway-Key':'valid-test-key'})[0] in (400,401,403)
+def test_real_tls_accepts_client_certificate_or_api_key(tls_edge):
+    # Certificate path: no API key required.
+    assert tls_edge()[0] == 200
+    # API-key path: no client certificate required.
+    assert tls_edge(client_cert=False, extra={'X-Gateway-Key':'valid-test-key'})[0] == 200
+    # No valid identity at all is rejected.
+    assert tls_edge(client_cert=False)[0] == 401
+    assert tls_edge(client_cert=False, extra={'X-Gateway-Key':'wrong'})[0] == 401
