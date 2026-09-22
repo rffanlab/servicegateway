@@ -53,7 +53,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         lines.append(f"  limit_conn_zone $binary_remote_addr zone=sg_conn_{ident}:1m;")
         if r.rate_per_second:
             lines.append(f"  limit_req_zone $binary_remote_addr zone=sg_{ident}:1m rate={r.rate_per_second}r/s;")
-        if r.auth in ('mtls', 'mtls_api_key'):
+        if r.auth in ('mtls', 'mtls_or_api_key', 'mtls_api_key'):
             origin = f'https://{r.host}' + (f':{r.listen_port}' if r.listen_port != 443 else '')
             lines += [f"  map $http_origin $sg_origin_{ident} {{", "    default 0;", "    '' 1;", f"    '{origin}' 1;", "  }"]
         groups[(r.listen_port, r.host)].append(r)
@@ -72,11 +72,13 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "    ssl_protocols TLSv1.2 TLSv1.3;", "    ssl_session_tickets off;",
                       "    add_header Strict-Transport-Security 'max-age=31536000' always;"]
         if ca:
+            optional_client_cert = any(r.auth in ('mtls_or_api_key', 'mtls_api_key') for r in routes)
             lines += [f"    ssl_client_certificate /etc/servicegateway/certs/{ca}/ca.pem;",
                       f"    ssl_crl /etc/servicegateway/certs/{ca}/crl.pem;",
-                      "    ssl_verify_client on;", "    ssl_verify_depth 2;",
+                      "    ssl_verify_client optional;" if optional_client_cert else "    ssl_verify_client on;",
+                      "    ssl_verify_depth 2;",
                       "    ssl_session_cache off;"]
-            if policy.get("remote_mode", False):
+            if policy.get("remote_mode", False) and not optional_client_cert:
                 lines.append("    if ($ssl_client_verify != SUCCESS) { return 403; }")
         # return executes before allow/deny, so restrict in that same rewrite phase.
         if not ca:
@@ -88,13 +90,14 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
         for r in sorted(routes, key=lambda x: x.path):
             ident = r.id.replace('-', '_')
-            if r.auth in ('session', 'api_key', 'mtls_api_key'):
+            if r.auth in ('session', 'api_key', 'mtls_or_api_key', 'mtls_api_key'):
                 lines += [f"    location = /_sg/auth/{r.id} {{", "      internal;",
                           f"      proxy_pass http://127.0.0.1:{admin_port}/internal/auth;",
                           "      proxy_pass_request_body off;", "      proxy_set_header Content-Length '';",
                           "      proxy_set_header Host 127.0.0.1;", f"      proxy_set_header X-SG-Secret {secret};",
                           f"      proxy_set_header X-SG-Route {r.id};", f"      proxy_set_header X-SG-Digest {digest};",
                           "      proxy_set_header Cookie $http_cookie;", "      proxy_set_header X-Gateway-Key $http_x_gateway_key;",
+                          "      proxy_set_header X-SG-Client-Verify $ssl_client_verify;",
                           "      proxy_connect_timeout 3s;", "      proxy_read_timeout 5s;", "    }"]
             elif r.auth == 'e5':
                 lines += [f"    location = /_sg/auth/{r.id} {{", "      internal;",
@@ -102,9 +105,13 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                           "      proxy_set_header Content-Length '';", "      proxy_set_header Cookie $http_cookie;",
                           "      proxy_set_header X-Real-IP $remote_addr;", "    }"]
             lines += [f"    location ^~ {r.path} {{", f"      set $sg_route '{r.id}';"]
-            if r.auth in ('mtls', 'mtls_api_key'):
+            if r.auth in ('mtls', 'mtls_or_api_key', 'mtls_api_key'):
                 lines += [f"      if ($sg_origin_{ident} = 0) {{ return 403; }}",
                           "      if ($sg_unsafe_site = 1) { return 403; }"]
+            if r.auth == 'mtls':
+                # Required when this vhost uses optional client certificates because
+                # another path permits API-key fallback.
+                lines.append("      if ($ssl_client_verify != SUCCESS) { return 403; }")
             for cidr in effective_route_cidrs(policy, r):
                 lines.append(f"      allow {cidr};")
             lines += ["      deny all;", f"      limit_conn sg_conn_{ident} {r.max_connections};", "      limit_conn_status 429;"]
@@ -120,8 +127,9 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             for header in ('X-Gateway-Key', 'X-SG-Secret', 'X-SG-Digest', 'X-SG-Route', 'X-SG-Auth', 'X-SG-Upstream-Token', 'Forwarded', 'X-Forwarded-Host',
                            'X-Original-URL', 'X-Rewrite-URL', 'X-Auth-Request-User', 'X-Auth-Request-Email', 'X-Remote-User'):
                 lines.append(f"      proxy_set_header {header} '';" )
+            auth_label = 'mtls_or_api_key' if r.auth == 'mtls_api_key' else r.auth
             lines += [f"      proxy_set_header X-SG-Route '{r.id}';",
-                      f"      proxy_set_header X-SG-Auth '{r.auth}';"]
+                      f"      proxy_set_header X-SG-Auth '{auth_label}';"]
             if r.upstream_auth.mode == 'route_secret':
                 token = upstream_secrets.get(r.id)
                 if token:

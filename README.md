@@ -13,7 +13,7 @@
 | 中文控制台 | 登录、服务状态、路由表单、发布与回滚、密钥、用户权限、审计、访问采样 |
 | 服务管理 | 原 manifest 字段兼容、幂等登记、导入预览、HTTP 健康、systemd 状态、启停/重启/自启、仅注销登记 |
 | 网关 | 独立 Nginx 实例；端口/精确域名/路径路由、前缀移除、加权多上游、最少连接、IP 绑定；路由可复制 |
-| 业务认证 | API Key、mTLS、API Key+mTLS 双因子；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |
+| 业务认证 | API Key、mTLS、API Key 或 mTLS 任一通过；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |
 | 协议 | HTTP、TLS、SSE、WebSocket、流式上传下载；业务流量不经过 Python 转发 |
 | 身份与防护 | Argon2、哈希会话与 API Key、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
 | 发布 | 草稿版本与摘要检查、白名单复验、nginx -t、原子写入、独立发布 generation、落盘中断恢复、历史快照回滚 |
@@ -23,7 +23,7 @@
 
 **对外仅 TCP 80/443，由 ServiceGateway 的同一个 Nginx edge 实例统一管理。80 只跳转已登记域名到 HTTPS，443 按 SNI/域名分别转发管理台和业务。** 管理 API `127.0.0.1:19092`、状态端口 `127.0.0.1:19093` 不对外开放。不再创建 19091 控制台入口或 191xx 业务入口。初始 `ingress_enabled=false`，不会在证书与认证策略准备前开监听。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
 
-远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与应用密码登录，默认不绑定管理电脑的出口 IP；固定来源场景可额外启用 IP 白名单。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key** 或 **mTLS 客户端证书**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
+远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与应用密码登录，默认不绑定管理电脑的出口 IP；固定来源场景可额外启用 IP 白名单。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key**、**mTLS 客户端证书**，或 **API Key / mTLS 任一通过**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
 
 Web 用户不能写 root policy、systemd unit、sudoers 或 Nginx 日志目录。服务在目标主机安装并经本机管理员批准后才能登记/控制；不自动继承旧 E5 主机授权。不允许控制网关自身、SSH、MySQL 或系统 Nginx。
 
