@@ -74,6 +74,10 @@ class Upstream(Strict):
         return f"{self.address}:{self.port}"
 
 
+class UpstreamAuthSpec(Strict):
+    mode: Literal["none", "route_secret"] = "none"
+
+
 class RouteSpec(Strict):
     id: str = Field(pattern=ID)
     name: str = Field(min_length=1, max_length=100)
@@ -83,8 +87,9 @@ class RouteSpec(Strict):
     path: str = "/"
     strip_prefix: bool = False
     upstreams: list[Upstream] = Field(min_length=1, max_length=16)
-    auth: Literal["session", "api_key", "e5", "public", "mtls"] = "session"
+    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_api_key"] = "session"
     client_ca: str | None = Field(default=None, pattern=ID)
+    upstream_auth: UpstreamAuthSpec = Field(default_factory=UpstreamAuthSpec)
     session_users: list[str] = Field(default_factory=list, max_length=200)
     max_connections: int = Field(16, ge=1, le=1024)
     enabled: bool = True
@@ -127,10 +132,10 @@ class RouteSpec(Strict):
 
     @model_validator(mode="after")
     def unique_upstreams(self):
-        if self.auth == "mtls" and (not self.certificate or not self.client_ca):
-            raise ValueError("mTLS requires a server certificate and a client CA identifier")
-        if self.client_ca and self.auth != "mtls":
-            raise ValueError("client_ca is only valid for mTLS routes")
+        if self.auth in ("mtls", "mtls_api_key") and (not self.certificate or not self.client_ca):
+            raise ValueError("mTLS-based auth requires a server certificate and a client CA identifier")
+        if self.client_ca and self.auth not in ("mtls", "mtls_api_key"):
+            raise ValueError("client_ca is only valid for mTLS-based routes")
         if any(not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", u) for u in self.session_users):
             raise ValueError("Invalid session username")
         if len({x.key() for x in self.upstreams}) != len(self.upstreams):
