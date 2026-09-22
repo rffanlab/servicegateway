@@ -611,10 +611,17 @@ def create_app(settings=None, agent=None):
                 user, _ = principal(request, db, csrf=False)
                 if user.role != "admin" and user.username not in route.get("session_users", []):
                     raise HTTPException(403, "User is not permitted on this service")
-            elif route["auth"] in ("api_key", "mtls_api_key"):
+            elif route["auth"] == "api_key":
                 key = api_key(request, db)
                 if not key or rid not in key.route_ids:
                     raise HTTPException(401, "Invalid gateway key")
+            elif route["auth"] in ("mtls_or_api_key", "mtls_api_key"):
+                # OR semantics: a verified client certificate is sufficient; otherwise
+                # a route-scoped API key may authenticate the request.
+                if request.headers.get("X-SG-Client-Verify", "") != "SUCCESS":
+                    key = api_key(request, db)
+                    if not key or rid not in key.route_ids:
+                        raise HTTPException(401, "Valid client certificate or gateway key required")
             else:
                 raise HTTPException(403, "Invalid auth mode")
         return Response(status_code=204)
