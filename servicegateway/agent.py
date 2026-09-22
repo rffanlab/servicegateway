@@ -280,9 +280,21 @@ class Broker:
 
     def dispatch(self, req):
         action = req.get("action")
-        allowed = {"database-status": {"action"}, "database-create": {"action", "spec"}, "database-credentials": {"action", "service_id", "account"}, "pki-status": {"action"}, "client-bundle": {"action"}, "install-crl": {"action", "pem"}, "reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
+        allowed = {"wechat-config-status": {"action", "service_id"}, "wechat-code2session": {"action", "service_id", "code"}, "route-secret-check": {"action", "route_id", "token"}, "database-status": {"action"}, "database-create": {"action", "spec"}, "database-credentials": {"action", "service_id", "account"}, "pki-status": {"action"}, "client-bundle": {"action"}, "install-crl": {"action", "pem"}, "reload-tls": {"action"}, "sync-certificates": {"action"}, "bootstrap-ingress": {"action"}, "status": {"action"}, "inventory": {"action"}, "traffic": {"action"}, "validate": {"action", "snapshot"}, "apply": {"action", "snapshot", "expected", "generation"}, "service": {"action", "spec", "operation"}}
         if action not in allowed or set(req) - allowed[action]:
             raise ValueError("Unsupported agent request")
+        if action in ("wechat-config-status", "wechat-code2session"):
+            policy = load_policy(self.settings)
+            service_id = req["service_id"]
+            if service_id not in policy["services"]:
+                raise ValueError("Service is not locally approved for WeChat")
+            from . import wechat_apps
+            if action == "wechat-config-status":
+                return wechat_apps.status(service_id)
+            return wechat_apps.exchange_code(service_id, req["code"])
+        if action == "route-secret-check":
+            from .upstream_secrets import verify as verify_route_secret
+            return verify_route_secret(req["route_id"], req["token"])
         if action in ("database-status", "database-create", "database-credentials"):
             from . import business_databases as databases
             if action == "database-status":
