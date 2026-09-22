@@ -55,7 +55,7 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-status --service
 sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-config-delete --service avatar-app --confirm-service avatar-app
 ```
 
-AppSecret 只由受限 root Agent 读取。Agent 固定请求微信 `code2Session` 地址；管理 Web 进程拿不到 AppSecret，也不会拿到或返回微信 `session_key`。
+AppSecret 只由受限 root Agent 读取。Agent 固定请求微信 `code2Session` 地址；管理 Web 进程拿不到 AppSecret，也不会拿到或返回微信 `session_key`。同一 service 已配置后可以用相同 AppID 轮换 AppSecret，但不能直接把 AppID 改成另一个值；更换小程序必须先显式删除旧配置再重新绑定，以避免 OpenID 命名空间被静默切换。
 
 ## 3. 配置“微信登录后才能访问”的路由
 
