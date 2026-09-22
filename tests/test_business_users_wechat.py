@@ -149,8 +149,10 @@ def test_revoke_tokens_requires_admin_and_invalidates_current_token(signed):
 
 
 def test_wechat_route_roles_are_only_valid_for_wechat_auth():
-    spec = RouteSpec(**route(auth='wechat', user_roles=['vip','user']))
+    spec = RouteSpec(**route(auth='wechat', user_roles=['vip','user'], upstream_auth={'mode':'route_secret'}))
     assert spec.user_roles == ['vip','user']
+    with pytest.raises(ValidationError):
+        RouteSpec(**route(auth='wechat'))
     with pytest.raises(ValidationError):
         RouteSpec(**route(auth='api_key', user_roles=['vip']))
 
