@@ -98,14 +98,14 @@ def test_same_host_can_mix_wechat_and_mtls_paths_with_one_client_ca():
         id='admin-route', path='/admin/', auth='mtls',
         certificate='music-cert', client_ca='admin-ca'))
     wechat = RouteSpec(**route(
-        id='wechat-route', path='/api/', auth='wechat',
+        id='wechat-route', path='/api/', auth='wechat', upstream_auth={'mode':'route_secret'},
         certificate='music-cert', client_ca=None))
     snap = Snapshot(services=[service], routes=[mtls, wechat])
     # Schema accepts mixed path auth as long as the server certificate is shared
     # and all mTLS paths use the same non-null client CA.
     assert snap.routes[0].host == snap.routes[1].host
     policy = service_policy()
-    text = render(snap, policy, snap.digest(), SECRET)
+    text = render(snap, policy, snap.digest(), SECRET, upstream_secrets={'wechat-route':'wechat-route-secret'})
     assert 'ssl_verify_client optional;' in text
     admin_start = text.index('location ^~ /admin/')
     api_start = text.index('location ^~ /api/')
