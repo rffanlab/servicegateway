@@ -9,7 +9,7 @@
 本版采用以下落地方案：
 
 1. **服务级来源 CIDR 上限**：root policy 中每个已批准服务可选 `source_cidrs`。未设置时继续继承全局值，旧配置行为不变；路由只能等于或收窄所属服务的上限。
-2. **边缘鉴权新增“双因子”模式**：`mtls_api_key` 表示客户端证书和 `X-Gateway-Key` **同时必须通过**，不是二选一。
+2. **边缘鉴权新增“证书或 API Key”模式**：`mtls_or_api_key` 表示客户端证书或限定到该路由的 `X-Gateway-Key` **任意一种验证通过即可**。已短暂合并过的 `mtls_api_key` 值按相同 OR 语义兼容读取，但后台不再生成这个旧名称。
 3. **边缘认证与上游身份分离**：路由可配置 `upstream_auth.mode=route_secret`。Nginx 会覆盖客户端伪造头，再向上游注入固定的 `X-SG-Route`、`X-SG-Auth` 和 root-only 的 `X-SG-Upstream-Token`。
 4. **API/路由新增时服务只能下拉选择**：只能绑定已经登记的服务，不能在 UI 手填 service ID。
 5. **已有路由支持复制**：复制全部非秘密配置并生成新 route id；上游 Secret 永不复制，新路由使用 `route_secret` 时必须单独生成。
@@ -53,11 +53,11 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl service-source-cidrs --
 
 - `api_key`：只要求限定到该 route id 的 `X-Gateway-Key`；
 - `mtls`：只要求受信客户端证书；
-- `mtls_api_key`：**证书 + API Key 同时要求**。
+- `mtls_or_api_key`：**证书或 API Key 任意一种通过即可**。
 
-对于浏览器不保存应用 Bearer Token 的音乐后台，仍可使用纯 `mtls`。需要更强双因子或外部自动化同时持有两种凭据时，选 `mtls_api_key`。不要把一个共享 API Key 硬编码进公开浏览器前端。
+对于音乐后台，可以让浏览器使用客户端证书；外部自动化则使用限定到该 route id 的 API Key。两者不需要同时提供。不要把共享 API Key 硬编码进公开浏览器前端。
 
-同一业务 hostname 的客户端证书要求属于 TLS server 级能力；需要在同一域名同时承载“完全不要求客户端证书”的接口时，应重新评估域名拆分，而不是假装能在 Nginx location 层关闭 TLS 客户端证书协商。
+组合模式在 TLS server 层使用可选客户端证书：浏览器可提交并验证证书；未提交证书的调用继续进入 HTTP 层，用 API Key 校验。纯 `mtls` 路由仍要求证书成功。若同一 hostname 混合纯 mTLS 与组合模式，server 层保持可选请求证书，纯 mTLS 的 location 再显式拒绝未验证证书。
 
 ## 上游身份：route_secret
 
@@ -116,9 +116,9 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route ai
 
 鉴权下拉增加：
 
-`客户端证书 + API Key（两者都必须）`
+`客户端证书 或 API Key（任一通过即可）`
 
-选择后必须同时配置 server certificate 与 client CA，并创建限定到该 route id 的 API Key。
+选择后要配置 server certificate 与 client CA，以便证书路径可用；需要使用 API Key 的客户端再创建限定到该 route id 的 Key。每次请求只需其中一种身份成功。
 
 ### 复制路由
 
@@ -134,10 +134,10 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route ai
 
 1. 升级 ServiceGateway，但先保留音乐应用现有普通 Bearer Token。
 2. 为 `ai-music-platform` 设置服务级 `source_cidrs=["0.0.0.0/0"]`，不改全局 CIDR。
-3. 编辑/复制 `ai-music` 路由；根据客户端选择 `mtls` 或 `mtls_api_key`，启用 `route_secret`。
+3. 编辑/复制 `ai-music` 路由；根据客户端选择 `mtls` 或 `mtls_or_api_key`，启用 `route_secret`。
 4. 创建该 route 的 upstream Secret，并配置到 AI 音乐应用。
 5. AI 音乐普通管理 API 同时接受“旧 Bearer Token”与“正确 Gateway route secret”作为短暂迁移期。
-6. 发布网关路由并验证：正确证书可达；组合模式还必须有正确 API Key；错误/吊销证书和错误 Key 均拒绝。
+6. 发布网关路由并验证：组合模式下，正确证书（不带 Key）可达；不带证书但带正确 Key 也可达；两者都没有时拒绝。纯 mTLS 模式仍必须有正确证书。
 7. 验证本机直接访问 `127.0.0.1:18888` 且没有 route secret 时，普通管理 API 返回 401/403。
 8. 验证 Worker Token 与 Gateway route secret 权限隔离。
 9. 前端移除应用 Bearer Token 输入和本地存储。
@@ -154,7 +154,7 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route ai
 至少验证：
 
 - 音乐服务级 `/0` 不改变其他服务的最终 CIDR；
-- `mtls_api_key` 缺证书或缺 Key 任一条件都失败；
+- `mtls_or_api_key` 使用正确证书但无 Key 时成功，或无证书但正确 Key 时成功；两者都无效时失败；
 - API Key 必须限定到正确 route id；
 - 客户端伪造 `X-SG-Upstream-Token/X-SG-Route/X-SG-Auth` 会被覆盖；
 - 上游收到正确 route secret 后普通 API 成功；本机绕过网关无 secret 时失败；
