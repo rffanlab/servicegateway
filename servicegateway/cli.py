@@ -36,6 +36,9 @@ def main():
     wx.add_argument("--secret-file", type=Path, help="Read AppSecret from a root-owned private file instead of hidden prompt")
     wxs = sub.add_parser("wechat-status", help="Root-only: show whether a service has WeChat credentials configured")
     wxs.add_argument("--service", required=True)
+    wxd = sub.add_parser("wechat-config-delete", help="Root-only: remove one service's stored WeChat AppSecret")
+    wxd.add_argument("--service", required=True)
+    wxd.add_argument("--confirm-service", required=True)
     export = sub.add_parser("export-e5", help="Read E5 dynamic manifests or sanitize an exported /api/overview JSON")
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
@@ -93,7 +96,7 @@ def main():
             raise SystemExit("路由 Secret 操作未完成：" + message) from None
         finally:
             engine.dispose()
-    elif args.command in ("wechat-config", "wechat-status"):
+    elif args.command in ("wechat-config", "wechat-status", "wechat-config-delete"):
         if os.geteuid() != 0:
             raise SystemExit("必须由本机 root 管理微信小程序配置")
         from .agent import load_policy, root_file
@@ -105,6 +108,13 @@ def main():
         if args.command == "wechat-status":
             result = wechat_status(args.service)
             print(json.dumps(result, ensure_ascii=False))
+            return
+        if args.command == "wechat-config-delete":
+            if args.confirm_service != args.service:
+                raise SystemExit("确认服务 ID 不匹配；未删除微信配置")
+            from .wechat_apps import remove as remove_wechat
+            changed = remove_wechat(args.service)
+            print("微信配置已删除。" if changed else "该服务没有微信配置；未修改。")
             return
         if args.secret_file:
             path = root_file(args.secret_file)
