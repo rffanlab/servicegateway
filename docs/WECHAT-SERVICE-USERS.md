@@ -70,6 +70,14 @@ AppSecret 只由受限 root Agent 读取。Agent 固定请求微信 `code2Sessio
 
 这类路由仍然是公网 HTTPS 业务路由，但不是匿名接口，也不需要 API Key 或客户端证书。调用者必须携带业务 Token：
 
+**微信鉴权不会自动放宽来源 CIDR。** 如果小程序用户来自任意公网 IPv4，而该 service 目前仍继承全局 `127.0.0.1/32`，需要由本机 root 明确只放宽这个服务：
+
+```bash
+sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl service-source-cidrs --service avatar-app --cidr 0.0.0.0/0 --confirm-public
+```
+
+不要为了小程序把全局 `policy.allowed_cidrs` 改成 `0.0.0.0/0`。
+
 ```http
 Authorization: Bearer sgu_xxxxxxxxx
 ```
