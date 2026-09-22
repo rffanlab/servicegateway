@@ -30,6 +30,12 @@ def main():
     route_secret.add_argument("--route", required=True)
     route_secret.add_argument("--output", type=Path, required=True)
     route_secret.add_argument("--rotate", action="store_true", help="Generate a new secret; it takes effect on the next route publish")
+    wx = sub.add_parser("wechat-config", help="Root-only: configure one approved service's Mini Program AppID/AppSecret")
+    wx.add_argument("--service", required=True)
+    wx.add_argument("--appid", required=True)
+    wx.add_argument("--secret-file", type=Path, help="Read AppSecret from a root-owned private file instead of hidden prompt")
+    wxs = sub.add_parser("wechat-status", help="Root-only: show whether a service has WeChat credentials configured")
+    wxs.add_argument("--service", required=True)
     export = sub.add_parser("export-e5", help="Read E5 dynamic manifests or sanitize an exported /api/overview JSON")
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
@@ -87,6 +93,30 @@ def main():
             raise SystemExit("路由 Secret 操作未完成：" + message) from None
         finally:
             engine.dispose()
+    elif args.command in ("wechat-config", "wechat-status"):
+        if os.geteuid() != 0:
+            raise SystemExit("必须由本机 root 管理微信小程序配置")
+        from .agent import load_policy, root_file
+        from .wechat_apps import configure as configure_wechat, status as wechat_status, WechatConfigError
+        host_settings = Settings(_env_file=root_file('/etc/servicegateway/app.env'))
+        policy = load_policy(host_settings)
+        if args.service not in policy.get("services", {}):
+            raise SystemExit("服务尚未获得本机批准；未写入微信配置")
+        if args.command == "wechat-status":
+            result = wechat_status(args.service)
+            print(json.dumps(result, ensure_ascii=False))
+            return
+        if args.secret_file:
+            path = root_file(args.secret_file)
+            secret = path.read_text().strip()
+        else:
+            secret = getpass.getpass("微信小程序 AppSecret（隐藏输入，不打印）: ").strip()
+        try:
+            result = configure_wechat(args.service, args.appid, secret)
+        except WechatConfigError as exc:
+            raise SystemExit("微信配置未保存：" + str(exc)) from None
+        print("微信小程序配置已保存为 root-only 0600；AppSecret 未写入 MySQL/命令行/日志。")
+        print(json.dumps(result, ensure_ascii=False))
     elif args.command == "bootstrap-ingress":
         if os.geteuid() != 0:
             raise SystemExit("Ingress bootstrap requires local root")
