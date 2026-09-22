@@ -143,6 +143,8 @@ class RouteSpec(Strict):
             raise ValueError("Invalid business user role")
         if self.user_roles and self.auth != "wechat":
             raise ValueError("user_roles is only valid for WeChat-authenticated routes")
+        if self.auth == "wechat" and self.upstream_auth.mode != "route_secret":
+            raise ValueError("WeChat-authenticated routes require per-route upstream authentication")
         if len({x.key() for x in self.upstreams}) != len(self.upstreams):
             raise ValueError("Duplicate upstream")
         return self
