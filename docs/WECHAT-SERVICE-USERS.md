@@ -49,7 +49,7 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-config --service
 sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-status --service avatar-app
 ```
 
-不再使用该微信身份源时，显式删除 root-only AppSecret（不会自动删除业务用户数据）：
+不再使用该微信身份源时，显式删除 root-only AppSecret。此操作保留业务用户历史，但会撤销该 service 的全部现有业务 Token：
 
 ```bash
 sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-config-delete --service avatar-app --confirm-service avatar-app
