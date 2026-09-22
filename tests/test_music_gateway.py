@@ -90,3 +90,36 @@ assert.equal(routes[0].upstreams[0].port,18888);
 """
     result = subprocess.run(['node','--input-type=module','-e',script,module],capture_output=True,text=True,timeout=10)
     assert result.returncode == 0, result.stderr
+
+
+def test_same_host_can_mix_wechat_and_mtls_paths_with_one_client_ca():
+    service = ServiceSpec(**SPEC)
+    mtls = RouteSpec(**route(
+        id='admin-route', path='/admin/', auth='mtls',
+        certificate='music-cert', client_ca='admin-ca'))
+    wechat = RouteSpec(**route(
+        id='wechat-route', path='/api/', auth='wechat', upstream_auth={'mode':'route_secret'},
+        certificate='music-cert', client_ca=None))
+    snap = Snapshot(services=[service], routes=[mtls, wechat])
+    # Schema accepts mixed path auth as long as the server certificate is shared
+    # and all mTLS paths use the same non-null client CA.
+    assert snap.routes[0].host == snap.routes[1].host
+    policy = service_policy()
+    text = render(snap, policy, snap.digest(), SECRET, upstream_secrets={'wechat-route':'wechat-route-secret'})
+    assert 'ssl_verify_client optional;' in text
+    admin_start = text.index('location ^~ /admin/')
+    api_start = text.index('location ^~ /api/')
+    assert 'if ($ssl_client_verify != SUCCESS) { return 403; }' in text[admin_start:api_start]
+    assert 'auth_request /_sg/auth/wechat-route;' in text[api_start:]
+
+
+def test_same_host_rejects_conflicting_client_cas():
+    service = ServiceSpec(**SPEC)
+    first = RouteSpec(**route(
+        id='one', path='/one/', auth='mtls',
+        certificate='music-cert', client_ca='ca-one'))
+    second = RouteSpec(**route(
+        id='two', path='/two/', auth='mtls',
+        certificate='music-cert', client_ca='ca-two'))
+    with pytest.raises(ValidationError):
+        Snapshot(services=[service], routes=[first, second])

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from sqlalchemy import delete, select
 from .config import Settings
-from .db import Audit, LoginSession, User, database
+from .db import Audit, BusinessAccessToken, LoginSession, User, database
 from .schemas import ServiceSpec, Snapshot, endpoint
 from .security import ph
 
@@ -30,6 +30,15 @@ def main():
     route_secret.add_argument("--route", required=True)
     route_secret.add_argument("--output", type=Path, required=True)
     route_secret.add_argument("--rotate", action="store_true", help="Generate a new secret; it takes effect on the next route publish")
+    wx = sub.add_parser("wechat-config", help="Root-only: configure one approved service's Mini Program AppID/AppSecret")
+    wx.add_argument("--service", required=True)
+    wx.add_argument("--appid", required=True)
+    wx.add_argument("--secret-file", type=Path, help="Read AppSecret from a root-owned private file instead of hidden prompt")
+    wxs = sub.add_parser("wechat-status", help="Root-only: show whether a service has WeChat credentials configured")
+    wxs.add_argument("--service", required=True)
+    wxd = sub.add_parser("wechat-config-delete", help="Root-only: remove one service's stored WeChat AppSecret")
+    wxd.add_argument("--service", required=True)
+    wxd.add_argument("--confirm-service", required=True)
     export = sub.add_parser("export-e5", help="Read E5 dynamic manifests or sanitize an exported /api/overview JSON")
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
@@ -87,6 +96,45 @@ def main():
             raise SystemExit("路由 Secret 操作未完成：" + message) from None
         finally:
             engine.dispose()
+    elif args.command in ("wechat-config", "wechat-status", "wechat-config-delete"):
+        if os.geteuid() != 0:
+            raise SystemExit("必须由本机 root 管理微信小程序配置")
+        from .agent import load_policy, root_file
+        from .wechat_apps import configure as configure_wechat, status as wechat_status, WechatConfigError
+        host_settings = Settings(_env_file=root_file('/etc/servicegateway/app.env'))
+        policy = load_policy(host_settings)
+        if args.service not in policy.get("services", {}):
+            raise SystemExit("服务尚未获得本机批准；未写入微信配置")
+        if args.command == "wechat-status":
+            result = wechat_status(args.service)
+            print(json.dumps(result, ensure_ascii=False))
+            return
+        if args.command == "wechat-config-delete":
+            if args.confirm_service != args.service:
+                raise SystemExit("确认服务 ID 不匹配；未删除微信配置")
+            from .wechat_apps import remove as remove_wechat
+            changed = remove_wechat(args.service)
+            engine, sessions = database(host_settings)
+            try:
+                with sessions.begin() as db:
+                    result = db.execute(delete(BusinessAccessToken).where(BusinessAccessToken.service_id == args.service))
+                    db.add(Audit(actor="local-root", action="wechat.config.delete", target=args.service,
+                                 outcome="success", detail=f"config_removed={changed}; business_tokens_revoked={result.rowcount or 0}"))
+            finally:
+                engine.dispose()
+            print(("微信配置已删除；" if changed else "该服务没有微信配置；") + "该服务现有业务 Token 已全部撤销。")
+            return
+        if args.secret_file:
+            path = root_file(args.secret_file)
+            secret = path.read_text().strip()
+        else:
+            secret = getpass.getpass("微信小程序 AppSecret（隐藏输入，不打印）: ").strip()
+        try:
+            result = configure_wechat(args.service, args.appid, secret)
+        except WechatConfigError as exc:
+            raise SystemExit("微信配置未保存：" + str(exc)) from None
+        print("微信小程序配置已保存为 root-only 0600；AppSecret 未写入 MySQL/命令行/日志。")
+        print(json.dumps(result, ensure_ascii=False))
     elif args.command == "bootstrap-ingress":
         if os.geteuid() != 0:
             raise SystemExit("Ingress bootstrap requires local root")

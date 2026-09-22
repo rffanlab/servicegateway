@@ -36,6 +36,17 @@ def real_edge(tmp_path):
             pass
         def do_GET(self):
             if self.path=='/internal/auth':
+                route=self.headers.get('X-SG-Route')
+                if route=='wechat-route':
+                    good=self.headers.get('X-SG-Secret')==SECRET and self.headers.get('Authorization')=='Bearer valid-user-token'
+                    self.send_response(204 if good else 401)
+                    if good:
+                        self.send_header('X-SG-User-ID','user-from-auth')
+                        self.send_header('X-SG-User-Service','demo')
+                        self.send_header('X-SG-User-Role','user')
+                        self.send_header('X-SG-OpenID','openid-from-auth')
+                        self.send_header('X-SG-UnionID','unionid-from-auth')
+                    self.send_header('Content-Length','0'); self.end_headers(); return
                 good=self.headers.get('X-SG-Secret')==SECRET and self.headers.get('X-Gateway-Key')=='valid-test-key'
                 self.send_response(204 if good else 401); self.send_header('Content-Length','0'); self.end_headers(); return
             if self.path=='/events':
@@ -58,14 +69,14 @@ def real_edge(tmp_path):
         def echo(self):
             size=int(self.headers.get('Content-Length','0'))
             body=self.rfile.read(size).decode() if size else ''
-            data=json.dumps({'path':self.path,'method':self.command,'body':body,'cookie':self.headers.get('Cookie',''),'gateway_key':self.headers.get('X-Gateway-Key',''),'forwarded_for':self.headers.get('X-Forwarded-For',''),'upstream_token':self.headers.get('X-SG-Upstream-Token',''),'sg_route':self.headers.get('X-SG-Route',''),'sg_auth':self.headers.get('X-SG-Auth','')}).encode()
+            data=json.dumps({'path':self.path,'method':self.command,'body':body,'cookie':self.headers.get('Cookie',''),'gateway_key':self.headers.get('X-Gateway-Key',''),'forwarded_for':self.headers.get('X-Forwarded-For',''),'upstream_token':self.headers.get('X-SG-Upstream-Token',''),'sg_route':self.headers.get('X-SG-Route',''),'sg_auth':self.headers.get('X-SG-Auth',''),'user_id':self.headers.get('X-SG-User-ID',''),'user_service':self.headers.get('X-SG-User-Service',''),'user_role':self.headers.get('X-SG-User-Role',''),'openid':self.headers.get('X-SG-OpenID',''),'unionid':self.headers.get('X-SG-UnionID','')}).encode()
             self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
     upstream=ThreadingHTTPServer(('127.0.0.1',0),Backend)
     thread=threading.Thread(target=upstream.serve_forever,daemon=True); thread.start()
     port=unused_port(); status_port=unused_port()
-    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
+    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='wechat-route',name='WeChat user',service_id='demo',listen_port=port,path='/user/',auth='wechat',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=routes)
-    config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,upstream.server_port,upstream_secrets={'test-route':'server-route-secret'})
+    config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,upstream.server_port,upstream_secrets={'test-route':'server-route-secret','wechat-route':'wechat-route-secret'})
     config=config.replace('user www-data;','').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'nginx.pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('127.0.0.1:19093',f'127.0.0.1:{status_port}')
     (tmp_path/'client').mkdir(); (tmp_path/'proxy').mkdir()
     conf=tmp_path/'nginx.conf'; conf.write_text(config)
@@ -130,3 +141,36 @@ def test_real_websocket_upgrade_and_echo(real_edge):
         with sock.makefile('rb') as stream:
             head=stream.read(2); assert head==bytes([129,len(data)])
             assert stream.read(len(data))==data
+
+
+def test_real_wechat_route_requires_token_and_overwrites_user_headers(real_edge):
+    port,_=real_edge
+    with httpx.Client(trust_env=False) as c:
+        assert c.get(f'http://127.0.0.1:{port}/user/profile').status_code == 401
+        response=c.get(f'http://127.0.0.1:{port}/user/profile',headers={
+            'Authorization':'Bearer valid-user-token',
+            'X-SG-User-ID':'client-spoof',
+            'X-SG-User-Service':'evil',
+            'X-SG-User-Role':'admin',
+            'X-SG-OpenID':'spoof-openid',
+            'X-SG-UnionID':'spoof-unionid',
+        })
+        assert response.status_code == 200,response.text
+        data=response.json()
+        assert data['sg_route']=='wechat-route' and data['sg_auth']=='wechat'
+        assert data['user_id']=='user-from-auth'
+        assert data['user_service']=='demo'
+        assert data['user_role']=='user'
+        assert data['openid']=='openid-from-auth'
+        assert data['unionid']=='unionid-from-auth'
+
+
+def test_real_wechat_reserved_login_endpoints_do_not_fall_through_to_business_root(real_edge):
+    port,_=real_edge
+    with httpx.Client(trust_env=False) as c:
+        login=c.post(f'http://127.0.0.1:{port}/_sg/wechat/demo/login',json={'code':'one-time-code'})
+        assert login.status_code == 200,login.text
+        assert login.json()['path'] == '/internal/wechat/login/demo'
+        me=c.get(f'http://127.0.0.1:{port}/_sg/wechat/demo/me',headers={'Authorization':'Bearer opaque-user-token'})
+        assert me.status_code == 200,me.text
+        assert me.json()['path'] == '/internal/wechat/me/demo'

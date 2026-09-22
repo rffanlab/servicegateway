@@ -90,6 +90,15 @@ def resolve(snapshot, strict=True, preview=False):
     return result, missing
 
 
+def verify(route_id, token):
+    if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        raise SecretError('Invalid route secret')
+    record = _read(route_id)
+    if not secrets.compare_digest(record['secret'], token):
+        raise SecretError('Invalid route secret')
+    return {'route_id': route_id, 'service_id': record['service_id']}
+
+
 def ensure(route, rotate=False):
     if os.geteuid() != 0:
         raise SecretError('Local root is required for upstream secret management')

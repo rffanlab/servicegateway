@@ -87,10 +87,11 @@ class RouteSpec(Strict):
     path: str = "/"
     strip_prefix: bool = False
     upstreams: list[Upstream] = Field(min_length=1, max_length=16)
-    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key"] = "session"
+    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key", "wechat"] = "session"
     client_ca: str | None = Field(default=None, pattern=ID)
     upstream_auth: UpstreamAuthSpec = Field(default_factory=UpstreamAuthSpec)
     session_users: list[str] = Field(default_factory=list, max_length=200)
+    user_roles: list[str] = Field(default_factory=list, max_length=32)
     max_connections: int = Field(16, ge=1, le=1024)
     enabled: bool = True
     websocket: bool = True
@@ -138,6 +139,12 @@ class RouteSpec(Strict):
             raise ValueError("client_ca is only valid for mTLS-based routes")
         if any(not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", u) for u in self.session_users):
             raise ValueError("Invalid session username")
+        if any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", role) for role in self.user_roles):
+            raise ValueError("Invalid business user role")
+        if self.user_roles and self.auth != "wechat":
+            raise ValueError("user_roles is only valid for WeChat-authenticated routes")
+        if self.auth == "wechat" and self.upstream_auth.mode != "route_secret":
+            raise ValueError("WeChat-authenticated routes require per-route upstream authentication")
         if len({x.key() for x in self.upstreams}) != len(self.upstreams):
             raise ValueError("Duplicate upstream")
         return self
@@ -165,9 +172,13 @@ class Snapshot(Strict):
             protocol = protocols.setdefault(r.listen_port, bool(r.certificate))
             if protocol != bool(r.certificate):
                 raise ValueError("A port cannot mix plaintext and TLS")
-            listener = listeners.setdefault((r.listen_port, r.host), (r.certificate, r.client_ca))
-            if listener != (r.certificate, r.client_ca):
-                raise ValueError("Routes sharing a hostname and port must use identical server certificate and client CA")
+            listener = listeners.setdefault((r.listen_port, r.host), {"certificate": r.certificate, "client_ca": None})
+            if listener["certificate"] != r.certificate:
+                raise ValueError("Routes sharing a hostname and port must use the same server certificate")
+            if r.client_ca:
+                if listener["client_ca"] and listener["client_ca"] != r.client_ca:
+                    raise ValueError("mTLS routes sharing a hostname and port must use the same client CA")
+                listener["client_ca"] = r.client_ca
         return self
 
     def digest(self):

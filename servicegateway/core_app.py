@@ -16,7 +16,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 import httpx
 from .config import Settings
-from .db import ApiKey, Audit, GatewayState, Health, LoginSession, Release, Route, Service, User, database, now
+from .db import ApiKey, Audit, BusinessAccessToken, GatewayState, Health, LoginSession, Release, Route, Service, User, database, now
 from .ipc import AgentClient, AgentError
 from .schemas import ActionRequest, KeyRequest, PublishRequest, RouteSpec, ServiceSpec, Snapshot, Strict
 from .security import DUMMY_HASH, LoginLimiter, api_key, digest, ph, principal, verify
@@ -130,6 +130,7 @@ def create_app(settings=None, agent=None):
                 await asyncio.gather(*(one(s) for s in specs))
                 with sessions.begin() as db:
                     db.execute(delete(LoginSession).where(LoginSession.expires_at < now()))
+                    db.execute(delete(BusinessAccessToken).where(BusinessAccessToken.expires_at < now()))
             except Exception as exc:
                 log.warning("Health sweep failed: %s", type(exc).__name__)
             await asyncio.sleep(settings.health_interval)
@@ -622,6 +623,18 @@ def create_app(settings=None, agent=None):
                     key = api_key(request, db)
                     if not key or rid not in key.route_ids:
                         raise HTTPException(401, "Valid client certificate or gateway key required")
+            elif route["auth"] == "wechat":
+                from .business_users import authenticate_token
+                user, token_row, identity = authenticate_token(
+                    db, request, route["service_id"], route.get("user_roles", []))
+                headers = {
+                    "X-SG-User-ID": user.id,
+                    "X-SG-User-Service": user.service_id,
+                    "X-SG-User-Role": user.role,
+                    "X-SG-OpenID": identity.openid if identity else "",
+                    "X-SG-UnionID": identity.unionid if identity and identity.unionid else "",
+                }
+                return Response(status_code=204, headers=headers)
             else:
                 raise HTTPException(403, "Invalid auth mode")
         return Response(status_code=204)
