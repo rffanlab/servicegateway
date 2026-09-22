@@ -45,3 +45,8 @@ The Agent unit declares `Group=servicegateway` rather than a temporary ExecStart
 ## Business database provisioning
 
 Admins can create a new business schema from the UI or with `sgctl database-create` after a local root administrator explicitly runs `sgctl database-enable`. The constrained Agent uses a local MySQL socket; the Web runtime account gains no global privileges. Each approved service gets one `sgb_` schema and separate runtime (DML) / migration (DDL, including DROP on its own schema) accounts. Scoped registration/API keys cannot provision databases. Credential downloads require the current admin password and CSRF, and are not cached. Existing names are never taken over; partial DDL is retained for local review, not destructively rolled back. See [deployment and usage](docs/BUSINESS-DATABASES.md). MySQL 3306 remains private.
+
+
+## AI music / advanced business routing
+
+Business grants may define a service-specific source CIDR ceiling without widening the global policy. Remote routes support API key, mTLS, or mandatory mTLS+API-key authentication. Optional per-route upstream secrets attest that a request actually traversed the selected gateway route. Route drafts can be copied without copying secret values. See [AI music integration](docs/AI-MUSIC-INTEGRATION.md).
