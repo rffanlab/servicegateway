@@ -90,6 +90,23 @@ def configure(service_id, appid, appsecret):
     return {"configured": True, "appid": appid}
 
 
+def remove(service_id):
+    if os.geteuid() != 0:
+        raise WechatConfigError("Local root is required to remove WeChat configuration")
+    path = _path(service_id)
+    if not path.exists() and not path.is_symlink():
+        return False
+    from .agent import root_file
+    root_file(path)
+    path.unlink()
+    directory = os.open(STORE, os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return True
+
+
 def exchange_code(service_id, code, opener=None):
     data = _read(service_id)
     if not isinstance(code, str) or not 1 <= len(code) <= 256 or any(ord(ch) < 33 or ord(ch) > 126 for ch in code):
