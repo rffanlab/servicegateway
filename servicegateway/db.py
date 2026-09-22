@@ -1,5 +1,5 @@
 from datetime import datetime, UTC
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -52,6 +52,41 @@ class Route(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     service_id: Mapped[str] = mapped_column(ForeignKey("services.id"), index=True)
     spec: Mapped[dict] = mapped_column(JSON)
+
+
+class BusinessUser(Base):
+    __tablename__ = "business_users"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    service_id: Mapped[str] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(32), default="user")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    display_name: Mapped[str] = mapped_column(String(100), default="")
+    avatar_url: Mapped[str] = mapped_column(String(500), default="")
+    remark: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class WechatIdentity(Base):
+    __tablename__ = "wechat_identities"
+    __table_args__ = (UniqueConstraint("service_id", "appid", "openid", name="uq_wechat_service_app_openid"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service_id: Mapped[str] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("business_users.id", ondelete="CASCADE"), index=True)
+    appid: Mapped[str] = mapped_column(String(64))
+    openid: Mapped[str] = mapped_column(String(128))
+    unionid: Mapped[str | None] = mapped_column(String(128))
+
+
+class BusinessAccessToken(Base):
+    __tablename__ = "business_access_tokens"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    service_id: Mapped[str] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("business_users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class GatewayState(Base):
