@@ -150,7 +150,8 @@ python3 deploy/register-local.py --manifest /实际路径/service-registration.j
   if(['start','stop','restart','enable','disable'].includes(action)){const s=overview.assets.find(x=>x.id===id);if(['stop','restart','disable'].includes(action)&&!confirm(`${s.name}\n${s.warning}\n确认执行 ${action}？`))return; await api(`/api/services/${id}/actions`,'POST',{action,confirm:s.name});await load();return;}
   if(action==='check'){await api(`/api/services/${id}/health`,'POST');await load();return;}
   if(action==='service-new'||action==='service-edit'){await serviceEditor(id);return;}
-  if(action==='route-new'||action==='route-edit'){await routeEditor(id,false);return;}\n  if(action==='route-copy'){await routeEditor(id,true);return;}
+  if(action==='route-new'||action==='route-edit'){await routeEditor(id,false);return;}
+  if(action==='route-copy'){await routeEditor(id,true);return;}
   if(action==='service-delete'){if(confirm('仅注销管理登记，不停止程序、不删除数据。确认？')){await api(`/api/registry/services/${id}`,'DELETE');await load();}return;}
   if(action==='route-delete'){if(confirm('删除路由草稿？发布后才会停止此入口转发。')){await api(`/api/routes/${id}?revision=${overview.revision}`,'DELETE');await load();}return;}
   if(action==='preview'){const p=await api('/api/gateway/preview','POST');const missing=p.missing_upstream_secrets??[];const warning=missing.length?`<p class="hint full"><strong>缺少上游路由 Secret：</strong>${esc(missing.join(', '))}<br>先在服务器执行 sgctl route-secret --route 路由ID --output /root/安全文件，再让上游应用接受该 Secret；未配置时发布会失败。</p>`:'';edit('发布预览',`<p class="hint full">草稿版本 ${p.revision} · ${esc(p.digest)}<br>将执行二次校验、nginx -t、reload 与配置指纹检查。失败时恢复旧配置。</p>${warning}<pre class="readbox">${esc(p.config)}</pre>`+field('note','发布说明','','text'),async f=>{await api('/api/gateway/publish','POST',{revision:p.revision,digest:p.digest,note:f.get('note')});},'确认发布');return;}
