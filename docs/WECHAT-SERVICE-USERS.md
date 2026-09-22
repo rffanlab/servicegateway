@@ -49,6 +49,12 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-config --service
 sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-status --service avatar-app
 ```
 
+不再使用该微信身份源时，显式删除 root-only AppSecret（不会自动删除业务用户数据）：
+
+```bash
+sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl wechat-config-delete --service avatar-app --confirm-service avatar-app
+```
+
 AppSecret 只由受限 root Agent 读取。Agent 固定请求微信 `code2Session` 地址；管理 Web 进程拿不到 AppSecret，也不会拿到或返回微信 `session_key`。
 
 ## 3. 配置“微信登录后才能访问”的路由
