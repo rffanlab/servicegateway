@@ -74,9 +74,9 @@ def real_edge(tmp_path):
     upstream=ThreadingHTTPServer(('127.0.0.1',0),Backend)
     thread=threading.Thread(target=upstream.serve_forever,daemon=True); thread.start()
     port=unused_port(); status_port=unused_port()
-    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='wechat-route',name='WeChat user',service_id='demo',listen_port=port,path='/user/',auth='wechat',upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
+    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='wechat-route',name='WeChat user',service_id='demo',listen_port=port,path='/user/',auth='wechat',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=routes)
-    config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,upstream.server_port,upstream_secrets={'test-route':'server-route-secret'})
+    config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,upstream.server_port,upstream_secrets={'test-route':'server-route-secret','wechat-route':'wechat-route-secret'})
     config=config.replace('user www-data;','').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'nginx.pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('127.0.0.1:19093',f'127.0.0.1:{status_port}')
     (tmp_path/'client').mkdir(); (tmp_path/'proxy').mkdir()
     conf=tmp_path/'nginx.conf'; conf.write_text(config)
