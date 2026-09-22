@@ -58,14 +58,14 @@ def real_edge(tmp_path):
         def echo(self):
             size=int(self.headers.get('Content-Length','0'))
             body=self.rfile.read(size).decode() if size else ''
-            data=json.dumps({'path':self.path,'method':self.command,'body':body,'cookie':self.headers.get('Cookie',''),'gateway_key':self.headers.get('X-Gateway-Key',''),'forwarded_for':self.headers.get('X-Forwarded-For','')}).encode()
+            data=json.dumps({'path':self.path,'method':self.command,'body':body,'cookie':self.headers.get('Cookie',''),'gateway_key':self.headers.get('X-Gateway-Key',''),'forwarded_for':self.headers.get('X-Forwarded-For',''),'upstream_token':self.headers.get('X-SG-Upstream-Token',''),'sg_route':self.headers.get('X-SG-Route',''),'sg_auth':self.headers.get('X-SG-Auth','')}).encode()
             self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
     upstream=ThreadingHTTPServer(('127.0.0.1',0),Backend)
     thread=threading.Thread(target=upstream.serve_forever,daemon=True); thread.start()
     port=unused_port(); status_port=unused_port()
-    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
+    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=routes)
-    config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32']},snap.digest(),SECRET,upstream.server_port)
+    config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,upstream.server_port,upstream_secrets={'test-route':'server-route-secret'})
     config=config.replace('user www-data;','').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'nginx.pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('127.0.0.1:19093',f'127.0.0.1:{status_port}')
     (tmp_path/'client').mkdir(); (tmp_path/'proxy').mkdir()
     conf=tmp_path/'nginx.conf'; conf.write_text(config)
@@ -91,13 +91,15 @@ def test_real_proxy_query_body_auth_and_header_sanitization(real_edge):
     port,_=real_edge
     with httpx.Client(trust_env=False) as c:
         assert c.get(f'http://127.0.0.1:{port}/api/hello').status_code==401
-        response=c.post(f'http://127.0.0.1:{port}/api/hello?q=one%20two',content='actual request body',headers={'X-Gateway-Key':'valid-test-key','X-Forwarded-For':'evil','Cookie':'app_cookie=keep; sg_session=do-not-forward; other=keep'})
+        response=c.post(f'http://127.0.0.1:{port}/api/hello?q=one%20two',content='actual request body',headers={'X-Gateway-Key':'valid-test-key','X-Forwarded-For':'evil','X-SG-Upstream-Token':'evil-client-value','X-SG-Route':'evil-route','X-SG-Auth':'evil-auth','Cookie':'app_cookie=keep; sg_session=do-not-forward; other=keep'})
         assert response.status_code==200,response.text
         data=response.json()
         assert data['path']=='/hello?q=one%20two'
         assert data['body']=='actual request body'
         assert data['gateway_key']==''
         assert data['forwarded_for']=='127.0.0.1'
+        assert data['upstream_token']=='server-route-secret'
+        assert data['sg_route']=='test-route' and data['sg_auth']=='api_key'
         assert 'app_cookie=keep' in data['cookie']
         assert 'sg_session' not in data['cookie']
 
