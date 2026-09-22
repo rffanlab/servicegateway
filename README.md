@@ -2,7 +2,7 @@
 
 **MySQL 驱动的 Linux 服务管理与网关控制台。默认面向远程服务器，安装后不自动开放公网。**
 
-[AI 音乐接入](docs/AI-MUSIC-INTEGRATION.md) · [完整一键部署](docs/FULL-DEPLOYMENT.md) · [English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
+[业务用户与微信登录](docs/WECHAT-SERVICE-USERS.md) · [AI 音乐接入](docs/AI-MUSIC-INTEGRATION.md) · [完整一键部署](docs/FULL-DEPLOYMENT.md) · [English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
 
 当前为单主机功能版 0.1.0。合并代码不代表已经执行生产部署。依据已有 E5 Business Manager 注册合同实现兼容能力，不宣称复制了未提供的 E5 线上源码。代码测试通过不等于目标服务器已部署或通过安全审计。
 
@@ -13,7 +13,7 @@
 | 中文控制台 | 登录、服务状态、路由表单、发布与回滚、密钥、用户权限、审计、访问采样 |
 | 服务管理 | 原 manifest 字段兼容、幂等登记、导入预览、HTTP 健康、systemd 状态、启停/重启/自启、仅注销登记 |
 | 网关 | 独立 Nginx 实例；端口/精确域名/路径路由、前缀移除、加权多上游、最少连接、IP 绑定；路由可复制 |
-| 业务认证 | API Key、mTLS、API Key 或 mTLS 任一通过；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |
+| 业务认证 | API Key、mTLS、API Key 或 mTLS 任一通过、微信登录 Token；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |\n| 业务用户 | 按服务隔离的微信 OpenID/UnionID、角色、停用/撤销 Token、可信用户头、loopback introspection |
 | 协议 | HTTP、TLS、SSE、WebSocket、流式上传下载；业务流量不经过 Python 转发 |
 | 身份与防护 | Argon2、哈希会话与 API Key、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
 | 发布 | 草稿版本与摘要检查、白名单复验、nginx -t、原子写入、独立发布 generation、落盘中断恢复、历史快照回滚 |
@@ -23,7 +23,7 @@
 
 **对外仅 TCP 80/443，由 ServiceGateway 的同一个 Nginx edge 实例统一管理。80 只跳转已登记域名到 HTTPS，443 按 SNI/域名分别转发管理台和业务。** 管理 API `127.0.0.1:19092`、状态端口 `127.0.0.1:19093` 不对外开放。不再创建 19091 控制台入口或 191xx 业务入口。初始 `ingress_enabled=false`，不会在证书与认证策略准备前开监听。Agent 只有带对端 Unix 用户校验的本机 socket，没有网络监听和任意 shell。
 
-远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与应用密码登录，默认不绑定管理电脑的出口 IP；固定来源场景可额外启用 IP 白名单。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key**、**mTLS 客户端证书**，或 **API Key / mTLS 任一通过**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
+远程模式必须使用专用 HTTPS 管理域名及 Secure host-only Cookie。受 root 策略保护的管理虚拟主机提供 mTLS、CRL 与应用密码登录，默认不绑定管理电脑的出口 IP；固定来源场景可额外启用 IP 白名单。业务域名必须与管理域名隔离；远程路由只允许 **HTTPS + 限定 API Key**、**mTLS 客户端证书**、**API Key / mTLS 任一通过**，或显式配置的 **微信业务用户 Token**。旧 E5 会话、共享会话路由和 public 模式仅供显式 LAN 策略使用，不是远程默认值。
 
 Web 用户不能写 root policy、systemd unit、sudoers 或 Nginx 日志目录。服务在目标主机安装并经本机管理员批准后才能登记/控制；不自动继承旧 E5 主机授权。不允许控制网关自身、SSH、MySQL 或系统 Nginx。
 
@@ -86,3 +86,8 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 ## 业务数据库创建
 
 管理员可在“业务数据库”表单或服务卡片创建新业务库，本机部署可使用 `sgctl database-create`。通过 `sgctl database-enable` 一次性启用受限本机执行器；不授予 Web 运行账号全局 MySQL 权限。每个已批准服务对应独立 `sgb_` 库及运行/迁移账号，支持验证密码后下载连接配置、同名拒绝接管、幂等及中断保留；不包含删库或任意 SQL 接口。升级和账号权限说明见 [业务数据库](docs/BUSINESS-DATABASES.md)。
+
+
+## 业务用户与微信登录
+
+业务用户与 ServiceGateway 管理员账号完全隔离。管理员可按 service 查看/停用用户、管理业务角色和撤销业务 Token；微信小程序通过 `wx.login()` 的 code 换取网关自己的 `sgu_...` Bearer Token。`auth=wechat` 路由要求该 Token，可按 `user_roles` 进一步限制。网关向上游注入经过覆盖防伪的用户 ID/OpenID/UnionID/角色头；后端也可通过 loopback + route-secret 的 introspection 接口用 Token 查询用户信息。AppSecret 只保存在 root-only 配置中，微信 session_key 不返回控制面或客户端。详见 [业务用户与微信登录](docs/WECHAT-SERVICE-USERS.md)。
