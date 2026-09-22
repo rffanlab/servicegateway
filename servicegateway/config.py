@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     secure_cookie: bool = True
     cookie_domain: str | None = None
     session_hours: int = Field(12, ge=1, le=168)
+    business_token_days: int = Field(30, ge=1, le=90)
     agent_socket: str = "/run/servicegateway-agent/agent.sock"
     policy_file: str = "/etc/servicegateway/policy.json"
     auth_secret_file: str = "/etc/servicegateway/auth-secret"
