@@ -70,9 +70,18 @@ AppSecret 只由受限 root Agent 读取。Agent 固定请求微信 `code2Sessio
 ```json
 {
   "auth": "wechat",
-  "user_roles": []
+  "user_roles": [],
+  "upstream_auth": {"mode": "route_secret"}
 }
 ```
+
+微信登录路由**强制要求**每路由 `route_secret`。保存草稿后先执行：
+
+```bash
+sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route avatar-user-api --output /root/avatar-user-api-gateway.env
+```
+
+把导出的 `SG_UPSTREAM_TOKEN` 安全配置给对应业务服务后再发布。这样同机其他进程不能仅靠直连业务 loopback 端口伪造用户身份头。
 
 这类路由仍然是公网 HTTPS 业务路由，但不是匿名接口，也不需要 API Key 或客户端证书。调用者必须携带业务 Token：
 
@@ -279,7 +288,7 @@ cd ~/servicegateway && git fetch origin && git switch main && git pull --ff-only
 1. 升级 ServiceGateway；
 2. root 配置目标 service 的微信 AppID/AppSecret；
 3. 后台新增 `auth=wechat` 路由；
-4. 若后端需要 introspection，为该路由启用并配置 route-secret；
+4. 为微信路由创建 route-secret，并配置给对应业务服务；
 5. 发布路由；
 6. 小程序接入 `wx.login -> /_sg/wechat/<service>/login`；
 7. 用返回的 Bearer Token 调业务 API；
