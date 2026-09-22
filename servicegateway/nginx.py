@@ -92,6 +92,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                 f"      proxy_set_header X-SG-Digest {digest};",
                 f"      proxy_set_header X-SG-Service '{service_id}';",
                 f"      proxy_set_header X-SG-Business-Host '{host}';",
+                "      proxy_set_header Host 127.0.0.1;",
                 "      proxy_set_header X-SG-Client-IP $remote_addr;",
                 "      proxy_set_header X-Forwarded-For '';",
                 "      proxy_set_header Forwarded '';",
