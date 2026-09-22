@@ -62,11 +62,11 @@ def _read(service_id):
 
 
 def status(service_id):
-    try:
-        data = _read(service_id)
-        return {"configured": True, "appid": data["appid"]}
-    except (OSError, WechatConfigError, ValueError):
+    path = _path(service_id)
+    if not path.exists() and not path.is_symlink():
         return {"configured": False, "appid": None}
+    data = _read(service_id)
+    return {"configured": True, "appid": data["appid"]}
 
 
 def configure(service_id, appid, appsecret):
@@ -81,7 +81,9 @@ def configure(service_id, appid, appsecret):
     from .agent import atomic_write
     path = _path(service_id)
     if path.exists() or path.is_symlink():
-        _read(service_id)
+        previous = _read(service_id)
+        if previous["appid"] != appid:
+            raise WechatConfigError("Refusing to change AppID in place; explicitly delete the old WeChat configuration first")
     atomic_write(path, json.dumps({
         "service_id": service_id,
         "appid": appid,
