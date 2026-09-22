@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from sqlalchemy import delete, select
 from .config import Settings
-from .db import Audit, LoginSession, User, database
+from .db import Audit, BusinessAccessToken, LoginSession, User, database
 from .schemas import ServiceSpec, Snapshot, endpoint
 from .security import ph
 
@@ -114,7 +114,15 @@ def main():
                 raise SystemExit("确认服务 ID 不匹配；未删除微信配置")
             from .wechat_apps import remove as remove_wechat
             changed = remove_wechat(args.service)
-            print("微信配置已删除。" if changed else "该服务没有微信配置；未修改。")
+            engine, sessions = database(host_settings)
+            try:
+                with sessions.begin() as db:
+                    result = db.execute(delete(BusinessAccessToken).where(BusinessAccessToken.service_id == args.service))
+                    db.add(Audit(actor="local-root", action="wechat.config.delete", target=args.service,
+                                 outcome="success", detail=f"config_removed={changed}; business_tokens_revoked={result.rowcount or 0}"))
+            finally:
+                engine.dispose()
+            print(("微信配置已删除；" if changed else "该服务没有微信配置；") + "该服务现有业务 Token 已全部撤销。")
             return
         if args.secret_file:
             path = root_file(args.secret_file)
