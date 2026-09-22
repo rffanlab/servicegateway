@@ -163,3 +163,14 @@ def test_real_wechat_route_requires_token_and_overwrites_user_headers(real_edge)
         assert data['user_role']=='user'
         assert data['openid']=='openid-from-auth'
         assert data['unionid']=='unionid-from-auth'
+
+
+def test_real_wechat_reserved_login_endpoints_do_not_fall_through_to_business_root(real_edge):
+    port,_=real_edge
+    with httpx.Client(trust_env=False) as c:
+        login=c.post(f'http://127.0.0.1:{port}/_sg/wechat/demo/login',json={'code':'one-time-code'})
+        assert login.status_code == 200,login.text
+        assert login.json()['path'] == '/internal/wechat/login/demo'
+        me=c.get(f'http://127.0.0.1:{port}/_sg/wechat/demo/me',headers={'Authorization':'Bearer opaque-user-token'})
+        assert me.status_code == 200,me.text
+        assert me.json()['path'] == '/internal/wechat/me/demo'
