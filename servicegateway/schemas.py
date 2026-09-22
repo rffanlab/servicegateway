@@ -170,9 +170,13 @@ class Snapshot(Strict):
             protocol = protocols.setdefault(r.listen_port, bool(r.certificate))
             if protocol != bool(r.certificate):
                 raise ValueError("A port cannot mix plaintext and TLS")
-            listener = listeners.setdefault((r.listen_port, r.host), (r.certificate, r.client_ca))
-            if listener != (r.certificate, r.client_ca):
-                raise ValueError("Routes sharing a hostname and port must use identical server certificate and client CA")
+            listener = listeners.setdefault((r.listen_port, r.host), {"certificate": r.certificate, "client_ca": None})
+            if listener["certificate"] != r.certificate:
+                raise ValueError("Routes sharing a hostname and port must use the same server certificate")
+            if r.client_ca:
+                if listener["client_ca"] and listener["client_ca"] != r.client_ca:
+                    raise ValueError("mTLS routes sharing a hostname and port must use the same client CA")
+                listener["client_ca"] = r.client_ca
         return self
 
     def digest(self):
