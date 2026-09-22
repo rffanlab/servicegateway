@@ -21,6 +21,15 @@ def main():
     a.add_argument("username")
     approve = sub.add_parser("approve", help="Root-only: approve an already installed service manifest")
     approve.add_argument("manifest")
+    cidrs = sub.add_parser("service-source-cidrs", help="Root-only: set one approved service's source CIDR ceiling")
+    cidrs.add_argument("--service", required=True)
+    cidrs.add_argument("--cidr", action="append", default=[])
+    cidrs.add_argument("--inherit-global", action="store_true")
+    cidrs.add_argument("--confirm-public", action="store_true", help="Required when explicitly granting 0.0.0.0/0")
+    route_secret = sub.add_parser("route-secret", help="Root-only: create/export a route-origin secret for upstream authentication")
+    route_secret.add_argument("--route", required=True)
+    route_secret.add_argument("--output", type=Path, required=True)
+    route_secret.add_argument("--rotate", action="store_true", help="Generate a new secret; it takes effect on the next route publish")
     export = sub.add_parser("export-e5", help="Read E5 dynamic manifests or sanitize an exported /api/overview JSON")
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
@@ -43,6 +52,41 @@ def main():
             register_local(args.manifest, args.approve)
         except Exception as exc:
             raise SystemExit("本机登记失败：" + type(exc).__name__ + "; 请检查 manifest、unit 授权、Agent 和数据库，未发布路由") from None
+    elif args.command == "service-source-cidrs":
+        if os.geteuid() != 0:
+            raise SystemExit("必须由本机 root 调整服务来源授权")
+        from .agent import root_file
+        from .local_registration import set_source_cidrs
+        host_settings = Settings(_env_file=root_file('/etc/servicegateway/app.env'))
+        try:
+            values = set_source_cidrs(args.service, args.cidr, host_settings, args.inherit_global, args.confirm_public)
+        except Exception as exc:
+            raise SystemExit("来源 CIDR 未修改：" + str(exc)) from None
+        print("服务来源上限已更新；尚未发布任何路由。当前：" + (", ".join(values) if values else "继承全局策略"))
+    elif args.command == "route-secret":
+        if os.geteuid() != 0:
+            raise SystemExit("必须由本机 root 管理上游路由 Secret")
+        from .agent import root_file
+        from .db import Route
+        from .schemas import RouteSpec
+        from .upstream_secrets import ensure, export_env, SecretError
+        host_settings = Settings(_env_file=root_file('/etc/servicegateway/app.env'))
+        engine, sessions = database(host_settings)
+        try:
+            with sessions() as db:
+                row = db.get(Route, args.route)
+                if not row:
+                    raise SecretError("路由草稿不存在；先在后台保存路由")
+                route = RouteSpec.model_validate(row.spec)
+            record, changed = ensure(route, rotate=args.rotate)
+            output = export_env(record, args.output)
+            print(f"上游路由 Secret 已{'轮换' if changed and args.rotate else '创建/确认'}并写入 {output}（0600）；未打印 Secret。")
+            print("先让上游应用接受该 Secret，再发布路由；轮换时旧线上配置在发布前仍发送旧值。")
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, SecretError) else type(exc).__name__
+            raise SystemExit("路由 Secret 操作未完成：" + message) from None
+        finally:
+            engine.dispose()
     elif args.command == "bootstrap-ingress":
         if os.geteuid() != 0:
             raise SystemExit("Ingress bootstrap requires local root")

@@ -1,7 +1,9 @@
 """Root CLI registration: approve explicitly, then register without creating a route."""
 import fcntl
 import json
+import ipaddress
 import os
+import re
 from pathlib import Path
 from .agent import atomic_write, root_file, unit_info, validate_service, load_policy
 from .config import Settings
@@ -41,6 +43,38 @@ def approve(spec, settings):
         if not previous:
             policy.setdefault('services', {})[spec.id] = grant
             atomic_write(path, json.dumps(policy, ensure_ascii=False, indent=2) + '\n', 0o640)
+
+
+def set_source_cidrs(service_id, cidrs, settings, inherit_global=False, confirm_public=False):
+    """Root-only service source ceiling; changing it never publishes a route."""
+    if os.geteuid() != 0:
+        raise PermissionError('Local source-CIDR approval requires root')
+    if not isinstance(service_id, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,62}', service_id):
+        raise ValueError('Invalid service id')
+    if inherit_global and cidrs:
+        raise ValueError('Choose explicit CIDRs or --inherit-global, not both')
+    networks = []
+    if not inherit_global:
+        if not cidrs:
+            raise ValueError('At least one --cidr is required unless --inherit-global is used')
+        networks = [ipaddress.IPv4Network(value, strict=False) for value in cidrs]
+        if any(net.prefixlen == 0 for net in networks) and not confirm_public:
+            raise ValueError('0.0.0.0/0 requires --confirm-public; this changes only the selected service ceiling')
+    path = root_file(settings.policy_file)
+    fd = os.open(str(path) + '.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as lock:
+        root_file(str(path) + '.lock')
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        policy = json.loads(root_file(path).read_text())
+        grant = policy.get('services', {}).get(service_id)
+        if not grant:
+            raise ValueError('Service is not locally approved')
+        if inherit_global:
+            grant.pop('source_cidrs', None)
+        else:
+            grant['source_cidrs'] = [str(net) for net in networks]
+        atomic_write(path, json.dumps(policy, ensure_ascii=False, indent=2) + '\n', 0o640)
+        return grant.get('source_cidrs')
 
 
 def register_local(path, approve_first=False):

@@ -1,11 +1,13 @@
 from collections import defaultdict
 from .schemas import Snapshot
 from .ingress import render_frontdoor
+from .routing_policy import effective_route_cidrs
 
 
-def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_port=19092, generation=None):
+def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_port=19092, generation=None, upstream_secrets=None):
     """Structured config only. No user-provided snippets, credentials or arbitrary paths."""
     generation = generation or digest
+    upstream_secrets = upstream_secrets or {}
     lines = [
         f"# servicegateway-digest {digest}", "user www-data;", "worker_processes auto;",
         "pid /run/servicegateway-edge/nginx.pid;",
@@ -51,7 +53,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         lines.append(f"  limit_conn_zone $binary_remote_addr zone=sg_conn_{ident}:1m;")
         if r.rate_per_second:
             lines.append(f"  limit_req_zone $binary_remote_addr zone=sg_{ident}:1m rate={r.rate_per_second}r/s;")
-        if r.auth == 'mtls':
+        if r.auth in ('mtls', 'mtls_api_key'):
             origin = f'https://{r.host}' + (f':{r.listen_port}' if r.listen_port != 443 else '')
             lines += [f"  map $http_origin $sg_origin_{ident} {{", "    default 0;", "    '' 1;", f"    '{origin}' 1;", "  }"]
         groups[(r.listen_port, r.host)].append(r)
@@ -86,7 +88,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
         for r in sorted(routes, key=lambda x: x.path):
             ident = r.id.replace('-', '_')
-            if r.auth in ('session', 'api_key'):
+            if r.auth in ('session', 'api_key', 'mtls_api_key'):
                 lines += [f"    location = /_sg/auth/{r.id} {{", "      internal;",
                           f"      proxy_pass http://127.0.0.1:{admin_port}/internal/auth;",
                           "      proxy_pass_request_body off;", "      proxy_set_header Content-Length '';",
@@ -100,10 +102,10 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                           "      proxy_set_header Content-Length '';", "      proxy_set_header Cookie $http_cookie;",
                           "      proxy_set_header X-Real-IP $remote_addr;", "    }"]
             lines += [f"    location ^~ {r.path} {{", f"      set $sg_route '{r.id}';"]
-            if r.auth == 'mtls':
+            if r.auth in ('mtls', 'mtls_api_key'):
                 lines += [f"      if ($sg_origin_{ident} = 0) {{ return 403; }}",
                           "      if ($sg_unsafe_site = 1) { return 403; }"]
-            for cidr in r.allow_cidrs or policy['allowed_cidrs']:
+            for cidr in effective_route_cidrs(policy, r):
                 lines.append(f"      allow {cidr};")
             lines += ["      deny all;", f"      limit_conn sg_conn_{ident} {r.max_connections};", "      limit_conn_status 429;"]
             if r.auth not in ('public', 'mtls'):
@@ -115,9 +117,15 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "      proxy_set_header Host $http_host;", "      proxy_set_header X-Real-IP $remote_addr;",
                       "      proxy_set_header X-Forwarded-For $remote_addr;", "      proxy_set_header X-Forwarded-Proto $scheme;",
                       "      proxy_set_header Cookie $sg_business_cookie;"]
-            for header in ('X-Gateway-Key', 'X-SG-Secret', 'X-SG-Digest', 'X-SG-Route', 'Forwarded', 'X-Forwarded-Host',
+            for header in ('X-Gateway-Key', 'X-SG-Secret', 'X-SG-Digest', 'X-SG-Route', 'X-SG-Auth', 'X-SG-Upstream-Token', 'Forwarded', 'X-Forwarded-Host',
                            'X-Original-URL', 'X-Rewrite-URL', 'X-Auth-Request-User', 'X-Auth-Request-Email', 'X-Remote-User'):
                 lines.append(f"      proxy_set_header {header} '';" )
+            lines += [f"      proxy_set_header X-SG-Route '{r.id}';",
+                      f"      proxy_set_header X-SG-Auth '{r.auth}';"]
+            if r.upstream_auth.mode == 'route_secret':
+                token = upstream_secrets.get(r.id)
+                if token:
+                    lines.append(f"      proxy_set_header X-SG-Upstream-Token '{token}';")
             lines += ["      proxy_set_header X-Request-ID $request_id;",
                       "      proxy_set_header Connection " + ('$sg_connection;' if r.websocket else "'';"),
                       "      proxy_set_header Upgrade " + ('$http_upgrade;' if r.websocket else "'';"),

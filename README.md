@@ -2,7 +2,7 @@
 
 **MySQL 驱动的 Linux 服务管理与网关控制台。默认面向远程服务器，安装后不自动开放公网。**
 
-[完整一键部署](docs/FULL-DEPLOYMENT.md) · [English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
+[AI 音乐接入](docs/AI-MUSIC-INTEGRATION.md) · [完整一键部署](docs/FULL-DEPLOYMENT.md) · [English](README.en.md) · [统一 80/443 入口](docs/UNIFIED-INGRESS.md) · [远程部署安全规范](docs/REMOTE-SECURITY.md) · [E5 资产迁移](docs/E5-DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [验收清单](docs/ACCEPTANCE.md)
 
 当前为单主机功能版 0.1.0。合并代码不代表已经执行生产部署。依据已有 E5 Business Manager 注册合同实现兼容能力，不宣称复制了未提供的 E5 线上源码。代码测试通过不等于目标服务器已部署或通过安全审计。
 
@@ -12,7 +12,8 @@
 |---|---|
 | 中文控制台 | 登录、服务状态、路由表单、发布与回滚、密钥、用户权限、审计、访问采样 |
 | 服务管理 | 原 manifest 字段兼容、幂等登记、导入预览、HTTP 健康、systemd 状态、启停/重启/自启、仅注销登记 |
-| 网关 | 独立 Nginx 实例；端口/精确域名/路径路由、前缀移除、加权多上游、最少连接、IP 绑定 |
+| 网关 | 独立 Nginx 实例；端口/精确域名/路径路由、前缀移除、加权多上游、最少连接、IP 绑定；路由可复制 |
+| 业务认证 | API Key、mTLS、API Key+mTLS 双因子；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |
 | 协议 | HTTP、TLS、SSE、WebSocket、流式上传下载；业务流量不经过 Python 转发 |
 | 身份与防护 | Argon2、哈希会话与 API Key、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
 | 发布 | 草稿版本与摘要检查、白名单复验、nginx -t、原子写入、独立发布 generation、落盘中断恢复、历史快照回滚 |

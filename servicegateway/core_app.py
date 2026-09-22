@@ -611,7 +611,7 @@ def create_app(settings=None, agent=None):
                 user, _ = principal(request, db, csrf=False)
                 if user.role != "admin" and user.username not in route.get("session_users", []):
                     raise HTTPException(403, "User is not permitted on this service")
-            elif route["auth"] == "api_key":
+            elif route["auth"] in ("api_key", "mtls_api_key"):
                 key = api_key(request, db)
                 if not key or rid not in key.route_ids:
                     raise HTTPException(401, "Invalid gateway key")
