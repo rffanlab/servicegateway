@@ -127,8 +127,9 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             for header in ('X-Gateway-Key', 'X-SG-Secret', 'X-SG-Digest', 'X-SG-Route', 'X-SG-Auth', 'X-SG-Upstream-Token', 'Forwarded', 'X-Forwarded-Host',
                            'X-Original-URL', 'X-Rewrite-URL', 'X-Auth-Request-User', 'X-Auth-Request-Email', 'X-Remote-User'):
                 lines.append(f"      proxy_set_header {header} '';" )
+            auth_label = 'mtls_or_api_key' if r.auth == 'mtls_api_key' else r.auth
             lines += [f"      proxy_set_header X-SG-Route '{r.id}';",
-                      f"      proxy_set_header X-SG-Auth '{r.auth}';"]
+                      f"      proxy_set_header X-SG-Auth '{auth_label}';"]
             if r.upstream_auth.mode == 'route_secret':
                 token = upstream_secrets.get(r.id)
                 if token:
