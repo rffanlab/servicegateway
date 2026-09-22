@@ -61,7 +61,12 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             lines += [f"  map $http_origin $sg_origin_{ident} {{", "    default 0;", "    '' 1;", f"    '{origin}' 1;", "  }"]
         groups[(r.listen_port, r.host)].append(r)
     for (port, host), routes in sorted(groups.items()):
-        cert, ca = routes[0].certificate, routes[0].client_ca
+        certs = {r.certificate for r in routes}
+        cas = {r.client_ca for r in routes if r.client_ca}
+        if len(certs) != 1 or len(cas) > 1:
+            raise ValueError("Inconsistent TLS identity in one business vhost")
+        cert = next(iter(certs))
+        ca = next(iter(cas)) if cas else None
         address = policy.get('listen_address', '127.0.0.1')
         lines += ["  server {", f"    listen {address}:{port}{' ssl' if cert else ''};", f"    server_name {host};"]
         if host != '_':
@@ -75,7 +80,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "    ssl_protocols TLSv1.2 TLSv1.3;", "    ssl_session_tickets off;",
                       "    add_header Strict-Transport-Security 'max-age=31536000' always;"]
         if ca:
-            optional_client_cert = any(r.auth in ('mtls_or_api_key', 'mtls_api_key') for r in routes)
+            optional_client_cert = any(r.auth != 'mtls' for r in routes)
             lines += [f"    ssl_client_certificate /etc/servicegateway/certs/{ca}/ca.pem;",
                       f"    ssl_crl /etc/servicegateway/certs/{ca}/crl.pem;",
                       "    ssl_verify_client optional;" if optional_client_cert else "    ssl_verify_client on;",
