@@ -57,7 +57,7 @@ def _identity(db, user_id, service_id):
     ).order_by(WechatIdentity.id).limit(1))
 
 
-def _payload(db, user, token_row=None):
+def _payload(db, user, token_row=None, admin=False):
     identity = _identity(db, user.id, user.service_id)
     return {
         "user_id": user.id,
@@ -66,7 +66,6 @@ def _payload(db, user, token_row=None):
         "enabled": user.enabled,
         "display_name": user.display_name,
         "avatar_url": user.avatar_url,
-        "remark": user.remark,
         "openid": identity.openid if identity else None,
         "unionid": identity.unionid if identity else None,
         "appid": identity.appid if identity else None,
@@ -74,6 +73,9 @@ def _payload(db, user, token_row=None):
         "last_login_at": user.last_login_at.isoformat() + "Z" if user.last_login_at else None,
         "token_expires_at": token_row.expires_at.isoformat() + "Z" if token_row else None,
     }
+    if admin:
+        data["remark"] = user.remark
+    return data
 
 
 def authenticate_token(db, request_or_token, service_id, roles=None):
@@ -132,7 +134,7 @@ def routes(sessions, agent, limiter, settings):
                 if not re.fullmatch(ID, service_id):
                     raise HTTPException(422, "Invalid service id")
                 query = query.where(BusinessUser.service_id == service_id)
-            return [_payload(db, user) for user in db.scalars(query)]
+            return [_payload(db, user, admin=True) for user in db.scalars(query)]
 
     @router.get("/api/business-users/wechat-status/{service_id}")
     def wechat_status(service_id: str, request: Request):
@@ -155,7 +157,7 @@ def routes(sessions, agent, limiter, settings):
                 db.execute(delete(BusinessAccessToken).where(BusinessAccessToken.user_id == user.id))
             db.add(Audit(actor=actor, action="business_user.update", target=user.id,
                          outcome="success", detail=f"service={user.service_id}; tokens revoked={body.enabled is False}"))
-            return _payload(db, user)
+            return _payload(db, user, admin=True)
 
     @router.post("/api/business-users/{user_id}/revoke-tokens")
     def revoke_tokens(user_id: str, request: Request):
