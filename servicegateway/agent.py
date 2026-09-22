@@ -21,6 +21,7 @@ from .ipc import MAX_MESSAGE
 from .nginx import render
 from .schemas import ServiceSpec, Snapshot, endpoint
 from .ingress import validate_ingress_policy, check_frontdoor, probe_ready
+from .routing_policy import normalize_service_source_cidrs, validate_route_source_cidrs
 
 CONFIG = Path("/etc/servicegateway/nginx.conf")
 CERTS = Path("/etc/servicegateway/certs")
@@ -95,6 +96,7 @@ def load_policy(settings):
                 policy["legacy_manifests"].append(spec.model_dump())
             except (OSError, ValueError):
                 continue
+    normalize_service_source_cidrs(policy)
     return policy
 
 
@@ -124,8 +126,8 @@ def validate_snapshot(snapshot, policy, inspect_units=True):
         if policy.get("remote_mode", True):
             if not policy.get("ingress_enabled", False) or route.listen_port != 443:
                 raise ValueError("Remote business routes require the enabled unified 443 ingress")
-            if route.auth not in ("api_key", "mtls") or not route.certificate or route.host == "_":
-                raise ValueError("Remote routes require exact host, TLS and API key or mTLS; no legacy/shared admin session")
+            if route.auth not in ("api_key", "mtls", "mtls_api_key") or not route.certificate or route.host == "_":
+                raise ValueError("Remote routes require exact host, TLS and API key, mTLS, or both")
             if route.host == policy.get("management_host"):
                 raise ValueError("Business routes must not use the management hostname")
             if route.rate_per_second < 1:
@@ -143,9 +145,7 @@ def validate_snapshot(snapshot, policy, inspect_units=True):
             raise ValueError(f"Unapproved upstream for {route.id}")
         if route.auth == "public" and not policy.get("allow_public", False):
             raise ValueError("Public routes are disabled by root policy")
-        networks = [ipaddress.IPv4Network(x) for x in policy["allowed_cidrs"]]
-        if any(not any(ipaddress.IPv4Network(cidr).subnet_of(n) for n in networks) for cidr in route.allow_cidrs):
-            raise ValueError("Route CIDRs cannot broaden the root policy")
+        validate_route_source_cidrs(policy, route)
         if route.client_ca and inspect_units:
             root_file(CERTS / route.client_ca / "ca.pem")
             root_file(CERTS / route.client_ca / "crl.pem")
@@ -250,7 +250,9 @@ class Broker:
             secret = self.settings.auth_secret()
             if not re.fullmatch(r"[0-9a-f]{32}", generation):
                 raise ValueError("Invalid release generation")
-            config = render(snapshot, policy, target, secret, self.settings.admin_port, generation)
+            from .upstream_secrets import resolve as resolve_upstream_secrets
+            route_secrets, _ = resolve_upstream_secrets(snapshot, strict=True, preview=False)
+            config = render(snapshot, policy, target, secret, self.settings.admin_port, generation, upstream_secrets=route_secrets)
             old = root_file(CONFIG).read_text()
             candidate = CONFIG.with_name("candidate.conf")
             atomic_write(candidate, config)
@@ -340,7 +342,10 @@ class Broker:
             if action == "apply":
                 return self.apply(snap, req["expected"], req["generation"])
             validate_snapshot(snap, policy)
-            return {"digest": snap.digest(), "config": render(snap, policy, snap.digest(), "REDACTED", self.settings.admin_port)}
+            from .upstream_secrets import resolve as resolve_upstream_secrets
+            preview_secrets, missing = resolve_upstream_secrets(snap, strict=False, preview=True)
+            return {"digest": snap.digest(), "config": render(snap, policy, snap.digest(), "REDACTED", self.settings.admin_port, upstream_secrets=preview_secrets),
+                    "missing_upstream_secrets": missing}
         spec = ServiceSpec.model_validate(req["spec"])
         validate_service(spec, policy)
         operation = req["operation"]
