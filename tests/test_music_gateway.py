@@ -37,25 +37,29 @@ def test_route_without_explicit_cidr_inherits_service_ceiling_in_nginx():
     assert '      allow 127.0.0.1/32;' not in text
 
 
-def test_mtls_api_key_requires_certificate_ca_and_is_digest_sensitive():
-    combined = RouteSpec(**route(auth='mtls_api_key', certificate='music-cert', client_ca='admin-ca'))
-    assert combined.auth == 'mtls_api_key'
+def test_mtls_or_api_key_requires_certificate_ca_and_is_digest_sensitive():
+    combined = RouteSpec(**route(auth='mtls_or_api_key', certificate='music-cert', client_ca='admin-ca'))
+    assert combined.auth == 'mtls_or_api_key'
     with pytest.raises(ValidationError):
-        RouteSpec(**route(auth='mtls_api_key', certificate='music-cert'))
+        RouteSpec(**route(auth='mtls_or_api_key', certificate='music-cert'))
+    # Compatibility for the briefly shipped old name: semantics are OR, not AND.
+    legacy = RouteSpec(**route(auth='mtls_api_key', certificate='music-cert', client_ca='admin-ca'))
+    assert legacy.auth == 'mtls_api_key'
     plain = RouteSpec(**route(auth='api_key'))
     assert Snapshot(services=[ServiceSpec(**SPEC)], routes=[combined]).digest() != Snapshot(services=[ServiceSpec(**SPEC)], routes=[plain]).digest()
 
 
-def test_internal_auth_treats_combined_mode_as_api_key(signed):
+def test_internal_auth_allows_verified_certificate_or_scoped_api_key(signed):
     client, _, _ = signed
     register(client)
-    save_route(client, auth='mtls_api_key', certificate='music-cert', client_ca='admin-ca')
+    save_route(client, auth='mtls_or_api_key', certificate='music-cert', client_ca='admin-ca')
     active = publish(client)
     token = client.post('/api/keys', json={'name':'music','route_ids':['demo-route']}).json()['token']
-    headers = {'X-SG-Secret':SECRET,'X-SG-Route':'demo-route','X-SG-Digest':active['digest'],'X-Gateway-Key':token}
-    assert client.get('/internal/auth', headers=headers).status_code == 204
-    headers.pop('X-Gateway-Key')
-    assert client.get('/internal/auth', headers=headers).status_code == 401
+    base = {'X-SG-Secret':SECRET,'X-SG-Route':'demo-route','X-SG-Digest':active['digest']}
+    assert client.get('/internal/auth', headers={**base,'X-SG-Client-Verify':'SUCCESS'}).status_code == 204
+    assert client.get('/internal/auth', headers={**base,'X-Gateway-Key':token,'X-SG-Client-Verify':'NONE'}).status_code == 204
+    assert client.get('/internal/auth', headers=base).status_code == 401
+    assert client.get('/internal/auth', headers={**base,'X-Gateway-Key':'wrong'}).status_code == 401
 
 
 def test_upstream_secret_preview_is_redacted_and_missing_is_reported(monkeypatch, tmp_path):
@@ -75,11 +79,11 @@ def test_route_clone_helper_keeps_service_and_config_but_changes_identity():
     script = r"""
 import assert from 'node:assert/strict';
 const {cloneRouteDraft}=await import(process.argv[1]);
-const routes=[{id:'music-api',name:'Music API',service_id:'music',auth:'mtls_api_key',upstream_auth:{mode:'route_secret'},upstreams:[{address:'127.0.0.1',port:18888}]},{id:'music-api-copy',name:'existing',service_id:'music'}];
+const routes=[{id:'music-api',name:'Music API',service_id:'music',auth:'mtls_or_api_key',upstream_auth:{mode:'route_secret'},upstreams:[{address:'127.0.0.1',port:18888}]},{id:'music-api-copy',name:'existing',service_id:'music'}];
 const clone=cloneRouteDraft(routes,'music-api');
 assert.equal(clone.id,'music-api-copy-2');
 assert.equal(clone.service_id,'music');
-assert.equal(clone.auth,'mtls_api_key');
+assert.equal(clone.auth,'mtls_or_api_key');
 assert.equal(clone.upstream_auth.mode,'route_secret');
 clone.upstreams[0].port=19999;
 assert.equal(routes[0].upstreams[0].port,18888);
