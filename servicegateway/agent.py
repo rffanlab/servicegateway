@@ -229,7 +229,10 @@ class Broker:
             if not route.enabled or key in seen:
                 continue
             seen.add(key)
-            if not probe_ready(route.host, route.listen_port, route.certificate, route.client_ca,
+            group = [candidate for candidate in snapshot.routes
+                     if candidate.enabled and (candidate.listen_port, candidate.host) == key]
+            client_ca = next((candidate.client_ca for candidate in group if candidate.client_ca), None)
+            if not probe_ready(route.host, route.listen_port, route.certificate, client_ca,
                                digest, generation, require_sni=policy.get("remote_mode", True)):
                 return False
         return True
