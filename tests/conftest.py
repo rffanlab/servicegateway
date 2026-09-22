@@ -48,6 +48,16 @@ class FakeAgent:
             return {'digest':snap.digest(),'config':'# REDACTED validated config'}
         if action == 'traffic':
             return {'sample':[], 'sampled_bytes':0}
+        if action == 'wechat-config-status':
+            return {'configured': True, 'appid': 'wx-test-appid'}
+        if action == 'wechat-code2session':
+            if payload.get('service_id') != 'demo' or not payload.get('code'):
+                raise AgentError('Invalid WeChat login')
+            return {'appid':'wx-test-appid','openid':'openid-test-user','unionid':'unionid-test-user'}
+        if action == 'route-secret-check':
+            if payload.get('route_id') != 'demo-route' or payload.get('token') != 'route-secret-test-value-abcdefghijklmnopqrstuvwxyz012345':
+                raise AgentError('Invalid route secret')
+            return {'route_id':'demo-route','service_id':'demo'}
         raise AssertionError(action)
 
 
