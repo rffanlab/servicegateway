@@ -59,7 +59,7 @@ def _identity(db, user_id, service_id):
 
 def _payload(db, user, token_row=None, admin=False):
     identity = _identity(db, user.id, user.service_id)
-    return {
+    data = {
         "user_id": user.id,
         "service_id": user.service_id,
         "role": user.role,
