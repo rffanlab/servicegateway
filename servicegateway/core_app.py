@@ -627,6 +627,9 @@ def create_app(settings=None, agent=None):
             elif route["auth"] == "wechat_user":
                 from .business_auth import gateway_identity
                 business_user, identity = gateway_identity(db, request, route["service_id"])
+                allowed_roles = route.get("business_roles", [])
+                if allowed_roles and business_user.role not in allowed_roles:
+                    raise HTTPException(403, "Business user role is not permitted on this route")
                 identity_headers = {
                     "X-SG-User-ID": business_user.id,
                     "X-SG-User-Role": business_user.role,
