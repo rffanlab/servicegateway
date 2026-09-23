@@ -41,7 +41,7 @@ class Boundary:
                 pass
 
         try:
-            for name in ('host', 'cookie', 'x-gateway-key', 'x-csrf-token', 'x-sg-secret', 'x-sg-digest', 'x-sg-route'):
+            for name in ('host', 'cookie', 'authorization', 'x-gateway-key', 'x-csrf-token', 'x-sg-secret', 'x-sg-digest', 'x-sg-route', 'x-sg-service', 'x-sg-business-host', 'x-sg-client-ip'):
                 if len(headers.getlist(name)) > 1:
                     return await reject(400, 'Ambiguous authentication or host headers')
             cookie_names = [v.strip().split('=', 1)[0] for v in headers.get('cookie', '').split(';')]
