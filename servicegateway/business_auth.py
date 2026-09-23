@@ -52,17 +52,18 @@ def _identity(db, user_id, service_id):
     ).order_by(WechatIdentity.id.desc()).limit(1))
 
 
-def _user_view(db, user, include_identity=True):
+def _user_view(db, user, include_identity=True, include_admin=False):
     result = {
         'id': user.id,
         'service_id': user.service_id,
         'role': user.role,
         'display_name': user.display_name,
-        'remark': user.remark,
         'enabled': user.enabled,
         'created_at': user.created_at.isoformat() + 'Z',
         'last_login_at': user.last_login_at.isoformat() + 'Z' if user.last_login_at else None,
     }
+    if include_admin:
+        result['remark'] = user.remark
     if include_identity:
         identity = _identity(db, user.id, user.service_id)
         result['wechat'] = ({
@@ -206,7 +207,7 @@ def routes(sessions, agent, limiter, settings):
             rows = list(db.scalars(select(BusinessUser).where(
                 BusinessUser.service_id == service_id
             ).order_by(BusinessUser.created_at.desc()).limit(1000)))
-            return [_user_view(db, row) for row in rows]
+            return [_user_view(db, row, include_admin=True) for row in rows]
 
     @router.patch('/api/business-users/{user_id}')
     def update_user(user_id: str, body: UserPatch, request: Request):
@@ -221,7 +222,7 @@ def routes(sessions, agent, limiter, settings):
                 db.execute(delete(BusinessSession).where(BusinessSession.user_id == user.id))
             db.add(Audit(actor=actor, action='business-user.update', target=user.id,
                          outcome='success', detail=f'service={user.service_id}; enabled={body.enabled}; role={body.role}'))
-            return _user_view(db, user)
+            return _user_view(db, user, include_admin=True)
 
     @router.post('/api/business-users/{user_id}/revoke-sessions')
     def revoke_sessions(user_id: str, request: Request):
