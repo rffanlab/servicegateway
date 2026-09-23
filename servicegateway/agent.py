@@ -126,8 +126,8 @@ def validate_snapshot(snapshot, policy, inspect_units=True):
         if policy.get("remote_mode", True):
             if not policy.get("ingress_enabled", False) or route.listen_port != 443:
                 raise ValueError("Remote business routes require the enabled unified 443 ingress")
-            if route.auth not in ("api_key", "mtls", "mtls_or_api_key", "mtls_api_key") or not route.certificate or route.host == "_":
-                raise ValueError("Remote routes require exact host, TLS and API key, mTLS, or certificate/API-key fallback")
+            if route.auth not in ("api_key", "mtls", "mtls_or_api_key", "mtls_api_key", "wechat_user") or not route.certificate or route.host == "_":
+                raise ValueError("Remote routes require exact host, TLS and an approved gateway auth mode")
             if route.host == policy.get("management_host"):
                 raise ValueError("Business routes must not use the management hostname")
             if route.rate_per_second < 1:
