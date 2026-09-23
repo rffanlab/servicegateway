@@ -9,6 +9,7 @@ depends_on = None
 
 
 def upgrade():
+    op.add_column('api_keys', sa.Column('user_service_ids', sa.JSON(), nullable=True))
     op.create_table(
         'business_users',
         sa.Column('id', sa.String(length=32), primary_key=True),
