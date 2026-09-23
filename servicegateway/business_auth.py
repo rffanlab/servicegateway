@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 
 from .db import Audit, BusinessSession, BusinessUser, GatewayState, Release, Service, WechatIdentity, now
 from .schemas import Strict
-from .security import digest, principal
+from .security import api_key, digest, principal
 
 TOKEN_RE = re.compile(r'^sgu_[A-Za-z0-9_-]{40,120}$')
 ROLE_RE = r'^[a-z][a-z0-9_-]{0,31}$'
@@ -193,6 +193,9 @@ def routes(sessions, agent, limiter, settings):
         if not request.client or request.client.host not in ('127.0.0.1', '::1', 'testclient'):
             raise HTTPException(403, 'Token introspection is loopback-only')
         with sessions.begin() as db:
+            key = api_key(request, db)
+            if not key or body.service_id not in (key.user_service_ids or []):
+                raise HTTPException(403, '需要该服务的业务用户查询 Key')
             user, _, session = _resolve_token(db, body.token, body.service_id)
             result = _user_view(db, user)
             result['token'] = {'active': True, 'expires_at': session.expires_at.isoformat() + 'Z'}
