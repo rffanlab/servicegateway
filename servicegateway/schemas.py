@@ -91,6 +91,7 @@ class RouteSpec(Strict):
     client_ca: str | None = Field(default=None, pattern=ID)
     upstream_auth: UpstreamAuthSpec = Field(default_factory=UpstreamAuthSpec)
     session_users: list[str] = Field(default_factory=list, max_length=200)
+    business_roles: list[str] = Field(default_factory=list, max_length=32)
     max_connections: int = Field(16, ge=1, le=1024)
     enabled: bool = True
     websocket: bool = True
@@ -138,6 +139,8 @@ class RouteSpec(Strict):
             raise ValueError("client_ca is only valid for mTLS-based routes")
         if any(not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", u) for u in self.session_users):
             raise ValueError("Invalid session username")
+        if any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", role) for role in self.business_roles):
+            raise ValueError("Invalid business user role")
         if len({x.key() for x in self.upstreams}) != len(self.upstreams):
             raise ValueError("Duplicate upstream")
         return self
