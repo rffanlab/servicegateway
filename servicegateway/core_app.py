@@ -593,7 +593,8 @@ def create_app(settings=None, agent=None):
         if not secrets.compare_digest(request.headers.get("X-SG-Secret", ""), settings.auth_secret()):
             raise HTTPException(403, "Forbidden")
         rid = request.headers.get("X-SG-Route", "")
-        with sessions() as db:
+        identity_headers = {}
+        with sessions.begin() as db:
             state = db.get(GatewayState, 1)
             release = db.get(Release, state.active_release) if state.active_release else None
             if not release:
@@ -623,9 +624,19 @@ def create_app(settings=None, agent=None):
                     key = api_key(request, db)
                     if not key or rid not in key.route_ids:
                         raise HTTPException(401, "Valid client certificate or gateway key required")
+            elif route["auth"] == "wechat_user":
+                from .business_auth import gateway_identity
+                business_user, identity = gateway_identity(db, request, route["service_id"])
+                identity_headers = {
+                    "X-SG-User-ID": business_user.id,
+                    "X-SG-User-Role": business_user.role,
+                    "X-SG-WeChat-OpenID": identity.openid,
+                }
+                if identity.unionid:
+                    identity_headers["X-SG-WeChat-UnionID"] = identity.unionid
             else:
                 raise HTTPException(403, "Invalid auth mode")
-        return Response(status_code=204)
+        return Response(status_code=204, headers=identity_headers)
 
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")
