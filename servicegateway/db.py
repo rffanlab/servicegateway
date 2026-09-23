@@ -1,5 +1,5 @@
 from datetime import datetime, UTC
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -78,8 +78,7 @@ class WechatIdentity(Base):
     last_login_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
     __table_args__ = (
-        __import__("sqlalchemy").UniqueConstraint("service_id", "appid", "openid",
-                                                   name="uq_wechat_identity_service_app_openid"),
+        UniqueConstraint("service_id", "appid", "openid", name="uq_wechat_identity_service_app_openid"),
     )
 
 
