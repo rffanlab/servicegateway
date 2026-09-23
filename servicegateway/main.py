@@ -12,5 +12,8 @@ from .security import LoginLimiter
 
 def create_app(settings=None, agent=None):
     app = core_create_app(settings, agent)
-    app.include_router(database_routes(app.state.sessions, app.state.agent, LoginLimiter()))
+    limiter = LoginLimiter()
+    app.include_router(database_routes(app.state.sessions, app.state.agent, limiter))
+    from .business_auth import routes as business_auth_routes
+    app.include_router(business_auth_routes(app.state.sessions, app.state.agent, limiter, app.state.settings))
     return app

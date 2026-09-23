@@ -16,7 +16,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 import httpx
 from .config import Settings
-from .db import ApiKey, Audit, GatewayState, Health, LoginSession, Release, Route, Service, User, database, now
+from .db import ApiKey, Audit, BusinessSession, GatewayState, Health, LoginSession, Release, Route, Service, User, database, now
 from .ipc import AgentClient, AgentError
 from .schemas import ActionRequest, KeyRequest, PublishRequest, RouteSpec, ServiceSpec, Snapshot, Strict
 from .security import DUMMY_HASH, LoginLimiter, api_key, digest, ph, principal, verify
@@ -130,6 +130,7 @@ def create_app(settings=None, agent=None):
                 await asyncio.gather(*(one(s) for s in specs))
                 with sessions.begin() as db:
                     db.execute(delete(LoginSession).where(LoginSession.expires_at < now()))
+                    db.execute(delete(BusinessSession).where(BusinessSession.expires_at < now()))
             except Exception as exc:
                 log.warning("Health sweep failed: %s", type(exc).__name__)
             await asyncio.sleep(settings.health_interval)
@@ -532,7 +533,7 @@ def create_app(settings=None, agent=None):
     def keys(request: Request):
         with sessions() as db:
             principal(request, db, "admin")
-            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "expires_at": k.expires_at.isoformat() + "Z", "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
+            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "user_service_ids": k.user_service_ids or [], "expires_at": k.expires_at.isoformat() + "Z", "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
 
     @app.post("/api/keys")
     def create_key(body: KeyRequest, request: Request):
@@ -540,9 +541,9 @@ def create_app(settings=None, agent=None):
         key_id = uuid.uuid4().hex
         with sessions.begin() as db:
             actor = principal(request, db, "admin")[0].username
-            if not body.route_ids and not body.service_ids:
-                raise HTTPException(422, "至少指定一个路由或服务注册作用域")
-            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, expires_at=now() + timedelta(days=body.expires_days)))
+            if not body.route_ids and not body.service_ids and not body.user_service_ids:
+                raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
+            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=now() + timedelta(days=body.expires_days)))
             audit(db, actor, "key.create", key_id)
         return {"id": key_id, "token": token, "notice": "密钥只显示本次；不会保存明文"}
 
@@ -592,7 +593,8 @@ def create_app(settings=None, agent=None):
         if not secrets.compare_digest(request.headers.get("X-SG-Secret", ""), settings.auth_secret()):
             raise HTTPException(403, "Forbidden")
         rid = request.headers.get("X-SG-Route", "")
-        with sessions() as db:
+        identity_headers = {}
+        with sessions.begin() as db:
             state = db.get(GatewayState, 1)
             release = db.get(Release, state.active_release) if state.active_release else None
             if not release:
@@ -622,9 +624,22 @@ def create_app(settings=None, agent=None):
                     key = api_key(request, db)
                     if not key or rid not in key.route_ids:
                         raise HTTPException(401, "Valid client certificate or gateway key required")
+            elif route["auth"] == "wechat_user":
+                from .business_auth import gateway_identity
+                business_user, identity = gateway_identity(db, request, route["service_id"])
+                allowed_roles = route.get("business_roles", [])
+                if allowed_roles and business_user.role not in allowed_roles:
+                    raise HTTPException(403, "Business user role is not permitted on this route")
+                identity_headers = {
+                    "X-SG-User-ID": business_user.id,
+                    "X-SG-User-Role": business_user.role,
+                    "X-SG-WeChat-OpenID": identity.openid,
+                }
+                if identity.unionid:
+                    identity_headers["X-SG-WeChat-UnionID"] = identity.unionid
             else:
                 raise HTTPException(403, "Invalid auth mode")
-        return Response(status_code=204)
+        return Response(status_code=204, headers=identity_headers)
 
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")

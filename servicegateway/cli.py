@@ -30,6 +30,12 @@ def main():
     route_secret.add_argument("--route", required=True)
     route_secret.add_argument("--output", type=Path, required=True)
     route_secret.add_argument("--rotate", action="store_true", help="Generate a new secret; it takes effect on the next route publish")
+    wc = sub.add_parser("wechat-config", help="Root-only: configure one approved service's WeChat Mini Program AppID/AppSecret")
+    wc.add_argument("--service", required=True)
+    wc.add_argument("--appid", required=True)
+    wc.add_argument("--disable", action="store_true")
+    wd = sub.add_parser("wechat-disable", help="Root-only: disable WeChat login for one service")
+    wd.add_argument("--service", required=True)
     export = sub.add_parser("export-e5", help="Read E5 dynamic manifests or sanitize an exported /api/overview JSON")
     export.add_argument("--overview-file")
     sub.add_parser("init-edge", help="Root-only: create the initial empty isolated Nginx config; never overwrite")
@@ -87,6 +93,28 @@ def main():
             raise SystemExit("路由 Secret 操作未完成：" + message) from None
         finally:
             engine.dispose()
+    elif args.command == "wechat-config":
+        if os.geteuid() != 0:
+            raise SystemExit("必须由本机 root 配置微信登录")
+        from .agent import root_file, load_policy
+        from .wechat import configure, WechatError
+        host_settings = Settings(_env_file=root_file('/etc/servicegateway/app.env'))
+        if args.service not in load_policy(host_settings)["services"]:
+            raise SystemExit("服务尚未获得本机批准")
+        try:
+            result = configure(args.service, args.appid, enabled=not args.disable, ask_secret=True)
+        except Exception as exc:
+            raise SystemExit("微信配置未保存：" + (str(exc) if isinstance(exc, WechatError) else type(exc).__name__)) from None
+        print("微信小程序登录配置已保存；AppSecret 未输出。AppID=" + str(result["appid"]))
+    elif args.command == "wechat-disable":
+        if os.geteuid() != 0:
+            raise SystemExit("必须由本机 root 停用微信登录")
+        from .wechat import disable, WechatError
+        try:
+            disable(args.service)
+        except Exception as exc:
+            raise SystemExit("微信登录未停用：" + (str(exc) if isinstance(exc, WechatError) else type(exc).__name__)) from None
+        print("已停用该服务的微信登录；现有业务 Token 仍可由后台单独吊销。")
     elif args.command == "bootstrap-ingress":
         if os.geteuid() != 0:
             raise SystemExit("Ingress bootstrap requires local root")

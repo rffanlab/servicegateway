@@ -50,3 +50,8 @@ Admins can create a new business schema from the UI or with `sgctl database-crea
 ## AI music / advanced business routing
 
 Business grants may define a service-specific source CIDR ceiling without widening the global policy. Remote routes support API key, mTLS, or certificate-or-API-key authentication (either valid credential is sufficient). Optional per-route upstream secrets attest that a request actually traversed the selected gateway route. Route drafts can be copied without copying secret values. See [AI music integration](docs/AI-MUSIC-INTEGRATION.md).
+
+
+## WeChat Mini Program business users
+
+ServiceGateway can manage business users separately per registered service. A `wechat_user` route requires an opaque service-scoped Bearer token issued after WeChat Mini Program `code2Session`; optional business roles further restrict routes. The root Agent owns AppSecret access and discards WeChat `session_key`. Downstream services receive trusted user/OpenID headers and may use a loopback introspection endpoint with a dedicated service-user query key. See `docs/WECHAT-BUSINESS-USERS.md`.

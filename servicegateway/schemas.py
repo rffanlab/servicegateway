@@ -87,10 +87,11 @@ class RouteSpec(Strict):
     path: str = "/"
     strip_prefix: bool = False
     upstreams: list[Upstream] = Field(min_length=1, max_length=16)
-    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key"] = "session"
+    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key", "wechat_user"] = "session"
     client_ca: str | None = Field(default=None, pattern=ID)
     upstream_auth: UpstreamAuthSpec = Field(default_factory=UpstreamAuthSpec)
     session_users: list[str] = Field(default_factory=list, max_length=200)
+    business_roles: list[str] = Field(default_factory=list, max_length=32)
     max_connections: int = Field(16, ge=1, le=1024)
     enabled: bool = True
     websocket: bool = True
@@ -138,6 +139,8 @@ class RouteSpec(Strict):
             raise ValueError("client_ca is only valid for mTLS-based routes")
         if any(not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", u) for u in self.session_users):
             raise ValueError("Invalid session username")
+        if any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", role) for role in self.business_roles):
+            raise ValueError("Invalid business user role")
         if len({x.key() for x in self.upstreams}) != len(self.upstreams):
             raise ValueError("Duplicate upstream")
         return self
@@ -189,9 +192,10 @@ class KeyRequest(Strict):
     name: str = Field(min_length=1, max_length=80)
     route_ids: list[str] = Field(default_factory=list, max_length=400)
     service_ids: list[str] = Field(default_factory=list, max_length=200)
+    user_service_ids: list[str] = Field(default_factory=list, max_length=200)
     expires_days: int = Field(90, ge=1, le=365)
 
-    @field_validator("route_ids", "service_ids")
+    @field_validator("route_ids", "service_ids", "user_service_ids")
     @classmethod
     def ids(cls, values):
         if any(not re.fullmatch(ID, x) for x in values):

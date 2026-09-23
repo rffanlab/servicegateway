@@ -1,7 +1,7 @@
 from collections import defaultdict
 from .schemas import Snapshot
 from .ingress import render_frontdoor
-from .routing_policy import effective_route_cidrs
+from .routing_policy import effective_route_cidrs, service_source_cidrs
 
 
 def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_port=19092, generation=None, upstream_secrets=None):
@@ -28,6 +28,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         "    default 0;", '    "~^(POST|PUT|PATCH|DELETE):(cross-site|same-site)$" 1;', "  }",
         "  log_format sg escape=json '{\"route\":\"$sg_route\",\"status\":$status,\"seconds\":$request_time,\"bytes\":$body_bytes_sent,\"request_id\":\"$request_id\"}';",
         "  access_log /srv/e5-logs/servicegateway/edge-access.log sg;",
+        "  limit_req_zone $binary_remote_addr zone=sg_wechat_login:1m rate=5r/s;",
         "  client_body_temp_path /var/lib/servicegateway/edge/client;",
         "  proxy_temp_path /var/lib/servicegateway/edge/proxy;",
         "  fastcgi_temp_path /var/lib/servicegateway/edge/fastcgi;",
@@ -88,9 +89,42 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",
                       "      if ($ssl_client_verify != SUCCESS) { return 403; }",
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
+        wechat_services = sorted({r.service_id for r in routes if r.auth == 'wechat_user'})
+        for service_id in wechat_services:
+            base = f"/_sg/wechat/{service_id}"
+            common = [
+                "      proxy_http_version 1.1;",
+                "      proxy_set_header Host 127.0.0.1;",
+                f"      proxy_set_header X-SG-Secret {secret};",
+                f"      proxy_set_header X-SG-Digest {digest};",
+                f"      proxy_set_header X-SG-Service {service_id};",
+                f"      proxy_set_header X-SG-Business-Host {host};",
+                "      proxy_set_header X-SG-Client-IP $remote_addr;",
+                "      proxy_set_header Cookie '';",
+                "      proxy_set_header X-Gateway-Key '';",
+                "      proxy_connect_timeout 3s;",
+                "      proxy_read_timeout 8s;",
+                "      proxy_buffering off;",
+            ]
+            source_rules = []
+            for cidr in service_source_cidrs(policy, service_id):
+                source_rules.append(f"      allow {cidr};")
+            source_rules.append("      deny all;")
+            lines += [f"    location = {base}/login {{",
+                      "      if ($request_method != POST) { return 405; }",
+                      "      limit_req zone=sg_wechat_login burst=10 nodelay; limit_req_status 429;",
+                      "      client_max_body_size 16k;"] + source_rules + [
+                      f"      proxy_pass http://127.0.0.1:{admin_port}/internal/wechat/login;"] + common + [
+                      "      proxy_set_header Authorization '';",
+                      "    }",
+                      f"    location = {base}/userinfo {{",
+                      "      if ($request_method != GET) { return 405; }"] + source_rules + [
+                      f"      proxy_pass http://127.0.0.1:{admin_port}/internal/wechat/userinfo;"] + common + [
+                      "      proxy_set_header Authorization $http_authorization;",
+                      "    }"]
         for r in sorted(routes, key=lambda x: x.path):
             ident = r.id.replace('-', '_')
-            if r.auth in ('session', 'api_key', 'mtls_or_api_key', 'mtls_api_key'):
+            if r.auth in ('session', 'api_key', 'mtls_or_api_key', 'mtls_api_key', 'wechat_user'):
                 lines += [f"    location = /_sg/auth/{r.id} {{", "      internal;",
                           f"      proxy_pass http://127.0.0.1:{admin_port}/internal/auth;",
                           "      proxy_pass_request_body off;", "      proxy_set_header Content-Length '';",
@@ -98,6 +132,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                           f"      proxy_set_header X-SG-Route {r.id};", f"      proxy_set_header X-SG-Digest {digest};",
                           "      proxy_set_header Cookie $http_cookie;", "      proxy_set_header X-Gateway-Key $http_x_gateway_key;",
                           "      proxy_set_header X-SG-Client-Verify $ssl_client_verify;",
+                          "      proxy_set_header Authorization $http_authorization;",
                           "      proxy_connect_timeout 3s;", "      proxy_read_timeout 5s;", "    }"]
             elif r.auth == 'e5':
                 lines += [f"    location = /_sg/auth/{r.id} {{", "      internal;",
@@ -117,6 +152,13 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             lines += ["      deny all;", f"      limit_conn sg_conn_{ident} {r.max_connections};", "      limit_conn_status 429;"]
             if r.auth not in ('public', 'mtls'):
                 lines.append(f"      auth_request /_sg/auth/{r.id};")
+            if r.auth == 'wechat_user':
+                lines += [
+                    f"      auth_request_set $sg_user_id_{ident} $upstream_http_x_sg_user_id;",
+                    f"      auth_request_set $sg_user_role_{ident} $upstream_http_x_sg_user_role;",
+                    f"      auth_request_set $sg_openid_{ident} $upstream_http_x_sg_wechat_openid;",
+                    f"      auth_request_set $sg_unionid_{ident} $upstream_http_x_sg_wechat_unionid;",
+                ]
             if r.rate_per_second:
                 lines += [f"      limit_req zone=sg_{ident} burst={r.burst} nodelay;", "      limit_req_status 429;"]
             lines += [f"      client_max_body_size {r.max_body_mb}m;",
@@ -124,9 +166,20 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "      proxy_set_header Host $http_host;", "      proxy_set_header X-Real-IP $remote_addr;",
                       "      proxy_set_header X-Forwarded-For $remote_addr;", "      proxy_set_header X-Forwarded-Proto $scheme;",
                       "      proxy_set_header Cookie $sg_business_cookie;"]
-            for header in ('X-Gateway-Key', 'X-SG-Secret', 'X-SG-Digest', 'X-SG-Route', 'X-SG-Auth', 'X-SG-Upstream-Token', 'Forwarded', 'X-Forwarded-Host',
-                           'X-Original-URL', 'X-Rewrite-URL', 'X-Auth-Request-User', 'X-Auth-Request-Email', 'X-Remote-User'):
-                lines.append(f"      proxy_set_header {header} '';" )
+            scrub = ['X-Gateway-Key', 'X-SG-Secret', 'X-SG-Digest', 'X-SG-Route', 'X-SG-Auth',
+                     'X-SG-Upstream-Token', 'Forwarded', 'X-Forwarded-Host', 'X-Original-URL',
+                     'X-Rewrite-URL', 'X-Auth-Request-User', 'X-Auth-Request-Email', 'X-Remote-User']
+            if r.auth != 'wechat_user':
+                scrub += ['X-SG-User-ID', 'X-SG-User-Role', 'X-SG-WeChat-OpenID', 'X-SG-WeChat-UnionID']
+            for header in scrub:
+                lines.append(f"      proxy_set_header {header} '';")
+            if r.auth == 'wechat_user':
+                lines += [
+                    f"      proxy_set_header X-SG-User-ID $sg_user_id_{ident};",
+                    f"      proxy_set_header X-SG-User-Role $sg_user_role_{ident};",
+                    f"      proxy_set_header X-SG-WeChat-OpenID $sg_openid_{ident};",
+                    f"      proxy_set_header X-SG-WeChat-UnionID $sg_unionid_{ident};",
+                ]
             auth_label = 'mtls_or_api_key' if r.auth == 'mtls_api_key' else r.auth
             lines += [f"      proxy_set_header X-SG-Route '{r.id}';",
                       f"      proxy_set_header X-SG-Auth '{auth_label}';"]
