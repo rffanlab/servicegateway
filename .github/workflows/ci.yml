@@ -40,6 +40,8 @@ jobs:
         run: |
           python -m compileall -q servicegateway migrations tests deploy
           node --check servicegateway/static/app.js
+          node --check servicegateway/static/business-users.js
+          node --check servicegateway/static/route-tools.js
           bash -n deploy/install.sh
           bash -n deploy/verify.sh
           bash -n deploy/full-deploy.sh
