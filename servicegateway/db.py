@@ -37,6 +37,7 @@ class ApiKey(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     route_ids: Mapped[list] = mapped_column(JSON)
     service_ids: Mapped[list] = mapped_column(JSON)
+    user_service_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 
