@@ -46,6 +46,11 @@ class FakeAgent:
                 self.digest = snap.digest()
                 self.generation = payload["generation"]
             return {'digest':snap.digest(),'config':'# REDACTED validated config'}
+        if action == 'wechat-status':
+            return {'configured': True, 'enabled': True, 'appid': 'wx0123456789abcdef'}
+        if action == 'wechat-login':
+            code = payload['code']
+            return {'appid':'wx0123456789abcdef','openid':'openid_' + code[:24], 'unionid':'union_demo'}
         if action == 'traffic':
             return {'sample':[], 'sampled_bytes':0}
         raise AssertionError(action)
