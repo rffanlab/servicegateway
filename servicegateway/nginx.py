@@ -1,7 +1,7 @@
 from collections import defaultdict
 from .schemas import Snapshot
 from .ingress import render_frontdoor
-from .routing_policy import effective_route_cidrs
+from .routing_policy import effective_route_cidrs, service_source_cidrs
 
 
 def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_port=19092, generation=None, upstream_secrets=None):
@@ -106,15 +106,19 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                 "      proxy_read_timeout 8s;",
                 "      proxy_buffering off;",
             ]
+            source_rules = []
+            for cidr in service_source_cidrs(policy, service_id):
+                source_rules.append(f"      allow {cidr};")
+            source_rules.append("      deny all;")
             lines += [f"    location = {base}/login {{",
                       "      if ($request_method != POST) { return 405; }",
                       "      limit_req zone=sg_wechat_login burst=10 nodelay; limit_req_status 429;",
-                      "      client_max_body_size 16k;",
+                      "      client_max_body_size 16k;"] + source_rules + [
                       f"      proxy_pass http://127.0.0.1:{admin_port}/internal/wechat/login;"] + common + [
                       "      proxy_set_header Authorization '';",
                       "    }",
                       f"    location = {base}/userinfo {{",
-                      "      if ($request_method != GET) { return 405; }",
+                      "      if ($request_method != GET) { return 405; }"] + source_rules + [
                       f"      proxy_pass http://127.0.0.1:{admin_port}/internal/wechat/userinfo;"] + common + [
                       "      proxy_set_header Authorization $http_authorization;",
                       "    }"]
