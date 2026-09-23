@@ -55,3 +55,8 @@ Business grants may define a service-specific source CIDR ceiling without wideni
 ## WeChat Mini Program business users
 
 ServiceGateway can manage business users separately per registered service. A `wechat_user` route requires an opaque service-scoped Bearer token issued after WeChat Mini Program `code2Session`; optional business roles further restrict routes. The root Agent owns AppSecret access and discards WeChat `session_key`. Downstream services receive trusted user/OpenID headers and may use a loopback introspection endpoint with a dedicated service-user query key. See `docs/WECHAT-BUSINESS-USERS.md`.
+
+
+## Service-auth passthrough
+
+Remote HTTPS routes may use `service_auth` for an explicit path-prefix passthrough. ServiceGateway performs no user identity check for that prefix; the upstream service decides whether requests are anonymous or authenticated by its own Bearer token/cookie. TLS, service CIDR ceilings, rate/connection/body limits, approved upstreams, management-cookie stripping and trusted-header sanitation remain enforced. More-specific protected prefixes on the same hostname take precedence. See [service-auth passthrough](docs/SERVICE-AUTH-PASSTHROUGH.md).
