@@ -32,6 +32,17 @@ def test_remote_routes_fail_closed(bad):
         validate_snapshot(Snapshot(services=[ServiceSpec(**SPEC)],routes=[RouteSpec(**data)]), remote_policy(), inspect_units=False)
 
 
+def test_remote_service_auth_and_mixed_mtls_paths_are_allowed():
+    policy = remote_policy()
+    public_data = remote_route()
+    public_data.update(id='public-api', name='Public API', path='/open/', auth='service_auth')
+    admin_data = remote_route()
+    admin_data.update(id='admin-api', name='Admin API', path='/admin/', auth='mtls', client_ca='admin-ca')
+    snap = Snapshot(services=[ServiceSpec(**SPEC)],
+                    routes=[RouteSpec(**public_data), RouteSpec(**admin_data)])
+    validate_snapshot(snap, policy, inspect_units=False)
+
+
 def test_remote_tls_key_route_allowed_and_metadata_forbidden():
     p=remote_policy()
     data=remote_route()
