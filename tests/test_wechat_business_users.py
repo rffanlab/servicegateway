@@ -40,13 +40,18 @@ def test_wechat_login_creates_service_user_and_token_userinfo(signed):
     assert info.status_code == 200
     assert info.json()['wechat']['openid'] == 'openid_abc123'
 
+    service_key = client.post('/api/keys', json={
+        'name':'demo-userinfo', 'user_service_ids':['demo']
+    }).json()['token']
     introspect = client.post('/internal/business-users/introspect',
+                             headers={'X-Gateway-Key':service_key},
                              json={'service_id':'demo','token':body['access_token']})
     assert introspect.status_code == 200
     assert introspect.json()['token']['active'] is True
     assert introspect.json()['wechat']['openid'] == 'openid_abc123'
 
     wrong_service = client.post('/internal/business-users/introspect',
+                                 headers={'X-Gateway-Key':service_key},
                                  json={'service_id':'other','token':body['access_token']})
     assert wrong_service.status_code == 403
 
@@ -97,7 +102,9 @@ def test_business_user_admin_list_and_revoke(signed):
     assert status.status_code == 200 and status.json()['enabled'] is True
     revoke = client.post('/api/business-users/' + login['user']['id'] + '/revoke-sessions', json={})
     assert revoke.status_code == 200
+    key = client.post('/api/keys', json={'name':'revoke-check','user_service_ids':['demo']}).json()['token']
     assert client.post('/internal/business-users/introspect',
+                       headers={'X-Gateway-Key':key},
                        json={'service_id':'demo','token':login['access_token']}).status_code == 401
 
 
