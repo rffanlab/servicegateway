@@ -533,7 +533,7 @@ def create_app(settings=None, agent=None):
     def keys(request: Request):
         with sessions() as db:
             principal(request, db, "admin")
-            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "expires_at": k.expires_at.isoformat() + "Z", "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
+            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "user_service_ids": k.user_service_ids or [], "expires_at": k.expires_at.isoformat() + "Z", "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
 
     @app.post("/api/keys")
     def create_key(body: KeyRequest, request: Request):
@@ -541,9 +541,9 @@ def create_app(settings=None, agent=None):
         key_id = uuid.uuid4().hex
         with sessions.begin() as db:
             actor = principal(request, db, "admin")[0].username
-            if not body.route_ids and not body.service_ids:
-                raise HTTPException(422, "至少指定一个路由或服务注册作用域")
-            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, expires_at=now() + timedelta(days=body.expires_days)))
+            if not body.route_ids and not body.service_ids and not body.user_service_ids:
+                raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
+            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=now() + timedelta(days=body.expires_days)))
             audit(db, actor, "key.create", key_id)
         return {"id": key_id, "token": token, "notice": "密钥只显示本次；不会保存明文"}
 
