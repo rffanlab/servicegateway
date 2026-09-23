@@ -82,6 +82,17 @@ X-Gateway-Key: sg_...
 
 创建这种 Key 时，在后台“API 密钥”里只填写“可查询业务用户的服务 ID”；它与路由访问作用域、服务注册作用域相互独立。
 
+## 与业务公开透传的关系
+
+如果某个前缀完全交给业务服务自己判断匿名/自有 JWT/Cookie，不需要 ServiceGateway 微信 Token，应使用 `service_auth`，而不是 `wechat_user`。例如：
+
+```text
+/api/public/ -> service_auth
+/api/user/   -> wechat_user
+```
+
+`service_auth` 会保留业务自己的 Authorization/Cookie，但不会注入微信用户身份；详见 [业务自行鉴权 / 公开透传](SERVICE-AUTH-PASSTHROUGH.md)。
+
 ## 安全边界
 
 - 头像服务 Token 不能访问音乐服务的微信路由，也不能跨服务 introspect。
