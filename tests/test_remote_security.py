@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from fastapi.testclient import TestClient
 from servicegateway.agent import validate_snapshot
+from servicegateway.nginx import render
 from servicegateway.config import Settings
 from servicegateway.db import LoginSession, now
 from servicegateway.schemas import Snapshot, RouteSpec, ServiceSpec
@@ -41,6 +42,11 @@ def test_remote_service_auth_and_mixed_mtls_paths_are_allowed():
     snap = Snapshot(services=[ServiceSpec(**SPEC)],
                     routes=[RouteSpec(**public_data), RouteSpec(**admin_data)])
     validate_snapshot(snap, policy, inspect_units=False)
+    config = render(snap, policy, snap.digest(), SECRET)
+    assert "ssl_verify_client optional;" in config
+    assert "location ^~ /open/" in config
+    assert "location ^~ /admin/" in config
+    assert "if ($ssl_client_verify != SUCCESS) { return 403; }" in config
 
 
 def test_remote_tls_key_route_allowed_and_metadata_forbidden():
