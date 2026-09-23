@@ -109,6 +109,12 @@ def _published_service(request, db, settings):
     return service_id
 
 
+def gateway_identity(db, request: Request, service_id: str):
+    user, identity, _ = _resolve_token(db, _bearer(request), service_id)
+    return user, identity
+
+
+
 def routes(sessions, agent, limiter, settings):
     router = APIRouter()
 
