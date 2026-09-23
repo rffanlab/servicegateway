@@ -59,7 +59,11 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             lines += [f"  map $http_origin $sg_origin_{ident} {{", "    default 0;", "    '' 1;", f"    '{origin}' 1;", "  }"]
         groups[(r.listen_port, r.host)].append(r)
     for (port, host), routes in sorted(groups.items()):
-        cert, ca = routes[0].certificate, routes[0].client_ca
+        cert = routes[0].certificate
+        client_cas = {r.client_ca for r in routes if r.client_ca}
+        if len(client_cas) > 1:
+            raise ValueError("Routes sharing a host cannot use different client CAs")
+        ca = next(iter(client_cas), None)
         address = policy.get('listen_address', '127.0.0.1')
         lines += ["  server {", f"    listen {address}:{port}{' ssl' if cert else ''};", f"    server_name {host};"]
         if host != '_':
@@ -73,7 +77,10 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       "    ssl_protocols TLSv1.2 TLSv1.3;", "    ssl_session_tickets off;",
                       "    add_header Strict-Transport-Security 'max-age=31536000' always;"]
         if ca:
-            optional_client_cert = any(r.auth in ('mtls_or_api_key', 'mtls_api_key') for r in routes)
+            # Client certificate negotiation is a TLS-server concern.  When the
+            # same host also has API-key, WeChat or service-auth paths, request
+            # a certificate optionally and enforce SUCCESS only on pure-mTLS locations.
+            optional_client_cert = any(r.auth != 'mtls' for r in routes)
             lines += [f"    ssl_client_certificate /etc/servicegateway/certs/{ca}/ca.pem;",
                       f"    ssl_crl /etc/servicegateway/certs/{ca}/crl.pem;",
                       "    ssl_verify_client optional;" if optional_client_cert else "    ssl_verify_client on;",
@@ -85,9 +92,12 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
         if not ca:
             lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
-        else:
+        elif not optional_client_cert:
             lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",
                       "      if ($ssl_client_verify != SUCCESS) { return 403; }",
+                      "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
+        else:
+            lines += ["    location = /_sg/ready {", "      if ($remote_addr != 127.0.0.1) { return 404; }",
                       "      access_log off;", f"      add_header X-SG-Generation {generation};", f"      return 200 '{digest}';", "    }"]
         wechat_services = sorted({r.service_id for r in routes if r.auth == 'wechat_user'})
         for service_id in wechat_services:
@@ -150,7 +160,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             for cidr in effective_route_cidrs(policy, r):
                 lines.append(f"      allow {cidr};")
             lines += ["      deny all;", f"      limit_conn sg_conn_{ident} {r.max_connections};", "      limit_conn_status 429;"]
-            if r.auth not in ('public', 'mtls'):
+            if r.auth not in ('public', 'service_auth', 'mtls'):
                 lines.append(f"      auth_request /_sg/auth/{r.id};")
             if r.auth == 'wechat_user':
                 lines += [

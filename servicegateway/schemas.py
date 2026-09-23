@@ -87,7 +87,7 @@ class RouteSpec(Strict):
     path: str = "/"
     strip_prefix: bool = False
     upstreams: list[Upstream] = Field(min_length=1, max_length=16)
-    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key", "wechat_user"] = "session"
+    auth: Literal["session", "api_key", "e5", "public", "service_auth", "mtls", "mtls_or_api_key", "mtls_api_key", "wechat_user"] = "session"
     client_ca: str | None = Field(default=None, pattern=ID)
     upstream_auth: UpstreamAuthSpec = Field(default_factory=UpstreamAuthSpec)
     session_users: list[str] = Field(default_factory=list, max_length=200)
@@ -168,9 +168,13 @@ class Snapshot(Strict):
             protocol = protocols.setdefault(r.listen_port, bool(r.certificate))
             if protocol != bool(r.certificate):
                 raise ValueError("A port cannot mix plaintext and TLS")
-            listener = listeners.setdefault((r.listen_port, r.host), (r.certificate, r.client_ca))
-            if listener != (r.certificate, r.client_ca):
-                raise ValueError("Routes sharing a hostname and port must use identical server certificate and client CA")
+            listener = listeners.setdefault((r.listen_port, r.host), {"certificate": r.certificate, "client_ca": r.client_ca})
+            if listener["certificate"] != r.certificate:
+                raise ValueError("Routes sharing a hostname and port must use the same server certificate")
+            if r.client_ca:
+                if listener["client_ca"] and listener["client_ca"] != r.client_ca:
+                    raise ValueError("Routes sharing a hostname and port cannot use different client CAs")
+                listener["client_ca"] = r.client_ca
         return self
 
     def digest(self):
