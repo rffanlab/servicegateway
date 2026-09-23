@@ -150,7 +150,7 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
             for cidr in effective_route_cidrs(policy, r):
                 lines.append(f"      allow {cidr};")
             lines += ["      deny all;", f"      limit_conn sg_conn_{ident} {r.max_connections};", "      limit_conn_status 429;"]
-            if r.auth not in ('public', 'mtls'):
+            if r.auth not in ('public', 'service_auth', 'mtls'):
                 lines.append(f"      auth_request /_sg/auth/{r.id};")
             if r.auth == 'wechat_user':
                 lines += [
