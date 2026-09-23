@@ -16,7 +16,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 import httpx
 from .config import Settings
-from .db import ApiKey, Audit, GatewayState, Health, LoginSession, Release, Route, Service, User, database, now
+from .db import ApiKey, Audit, BusinessSession, GatewayState, Health, LoginSession, Release, Route, Service, User, database, now
 from .ipc import AgentClient, AgentError
 from .schemas import ActionRequest, KeyRequest, PublishRequest, RouteSpec, ServiceSpec, Snapshot, Strict
 from .security import DUMMY_HASH, LoginLimiter, api_key, digest, ph, principal, verify
@@ -130,6 +130,7 @@ def create_app(settings=None, agent=None):
                 await asyncio.gather(*(one(s) for s in specs))
                 with sessions.begin() as db:
                     db.execute(delete(LoginSession).where(LoginSession.expires_at < now()))
+                    db.execute(delete(BusinessSession).where(BusinessSession.expires_at < now()))
             except Exception as exc:
                 log.warning("Health sweep failed: %s", type(exc).__name__)
             await asyncio.sleep(settings.health_interval)
