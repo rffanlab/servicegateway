@@ -87,7 +87,7 @@ class RouteSpec(Strict):
     path: str = "/"
     strip_prefix: bool = False
     upstreams: list[Upstream] = Field(min_length=1, max_length=16)
-    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key"] = "session"
+    auth: Literal["session", "api_key", "e5", "public", "mtls", "mtls_or_api_key", "mtls_api_key", "wechat_user"] = "session"
     client_ca: str | None = Field(default=None, pattern=ID)
     upstream_auth: UpstreamAuthSpec = Field(default_factory=UpstreamAuthSpec)
     session_users: list[str] = Field(default_factory=list, max_length=200)
