@@ -68,7 +68,7 @@ def render_frontdoor(snapshot, policy, digest, generation, admin_port):
         if not route.enabled:
             continue
         if (route.listen_port != 443 or route.host == host or not valid_host(route.host)
-                or not route.certificate or route.auth not in ('api_key', 'mtls', 'mtls_or_api_key', 'mtls_api_key')):
+                or not route.certificate or route.auth not in ('api_key', 'mtls', 'mtls_or_api_key', 'mtls_api_key', 'wechat_user')):
             raise ValueError('Invalid remote route for unified 443 ingress')
         hosts.add(route.host)
     lines = [
