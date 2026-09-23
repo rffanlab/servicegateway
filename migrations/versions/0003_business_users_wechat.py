@@ -22,7 +22,6 @@ def upgrade():
         sa.Column('last_login_at', sa.DateTime(), nullable=True),
     )
     op.create_index('ix_business_users_service_id', 'business_users', ['service_id'])
-    op.create_index('ix_business_users_service_enabled', 'business_users', ['service_id', 'enabled'])
 
     op.create_table(
         'wechat_identities',
@@ -49,7 +48,8 @@ def upgrade():
         sa.Column('expires_at', sa.DateTime(), nullable=False),
     )
     op.create_index('ix_business_sessions_user_id', 'business_sessions', ['user_id'])
-    op.create_index('ix_business_sessions_service_expires', 'business_sessions', ['service_id', 'expires_at'])
+    op.create_index('ix_business_sessions_service_id', 'business_sessions', ['service_id'])
+    op.create_index('ix_business_sessions_expires_at', 'business_sessions', ['expires_at'])
 
 
 def downgrade():
