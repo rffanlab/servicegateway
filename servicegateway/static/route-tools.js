@@ -10,6 +10,10 @@ export function cloneRouteDraft(routes, sourceId) {
   }
   copy.id = candidate;
   copy.name = (source.name + ' 副本').slice(0, 100);
+  // Route-origin secrets are deliberately per-route and are never copied.
+  // Reset the mode too, otherwise the new draft is guaranteed to fail publish
+  // until a brand-new secret is provisioned for its new route id.
+  copy.upstream_auth = {mode: 'none'};
   return copy;
 }
 

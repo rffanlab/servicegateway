@@ -128,7 +128,7 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route ai
 - 服务、域名、路径、上游、限流、证书、鉴权等配置预填；
 - 原路由保持不变；
 - 如果 host/path 完全相同，保存时仍按冲突规则拒绝，要求调整；
-- `upstream_auth.mode` 可以复制，但 Secret 值不复制；新 route 需要重新执行 `sgctl route-secret`。
+- `upstream_auth.mode` 在复制时重置为 `none`，因为 Secret 本身绝不能复制。若新 route 也需要上游身份确认，请手工重新选择 `route_secret`，然后为新 route 单独执行 `sgctl route-secret`。
 
 ## 音乐服务迁移顺序
 
