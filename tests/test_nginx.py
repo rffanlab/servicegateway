@@ -63,7 +63,7 @@ def real_edge(tmp_path):
     upstream=ThreadingHTTPServer(('127.0.0.1',0),Backend)
     thread=threading.Thread(target=upstream.serve_forever,daemon=True); thread.start()
     port=unused_port(); status_port=unused_port()
-    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='open-route',name='Open',service_id='demo',listen_port=port,path='/open/',auth='service_auth',upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
+    routes=[RouteSpec(id='test-route',name='Test',service_id='demo',listen_port=port,path='/api/',strip_prefix=True,auth='api_key',upstream_auth={'mode':'route_secret'},upstreams=[{'port':upstream.server_port}]),RouteSpec(id='open-private',name='Open Private',service_id='demo',listen_port=port,path='/open/private/',auth='api_key',upstreams=[{'port':upstream.server_port}]),RouteSpec(id='open-route',name='Open',service_id='demo',listen_port=port,path='/open/',auth='service_auth',upstreams=[{'port':upstream.server_port}]),RouteSpec(id='stream-route',name='Streams',service_id='demo',listen_port=port,path='/',auth='public',upstreams=[{'port':upstream.server_port}])]
     snap=Snapshot(services=[ServiceSpec(**SPEC)],routes=routes)
     config=render(snap,{'listen_address':'127.0.0.1','allowed_cidrs':['127.0.0.1/32'],'services':{'demo':{'source_cidrs':['127.0.0.1/32']}}},snap.digest(),SECRET,upstream.server_port,upstream_secrets={'test-route':'server-route-secret'})
     config=config.replace('user www-data;','').replace('/run/servicegateway-edge/nginx.pid',str(tmp_path/'nginx.pid')).replace('/srv/e5-logs/servicegateway',str(tmp_path)).replace('/var/lib/servicegateway/edge',str(tmp_path)).replace('127.0.0.1:19093',f'127.0.0.1:{status_port}')
@@ -122,6 +122,29 @@ def test_service_auth_prefix_bypasses_gateway_identity_but_preserves_service_aut
         assert data['sg_auth']=='service_auth'
         assert 'app_session=keep' in data['cookie']
         assert 'sg_session' not in data['cookie']
+
+
+def test_more_specific_child_route_never_inherits_public_parent(real_edge):
+    port,_=real_edge
+    with httpx.Client(trust_env=False, follow_redirects=False) as c:
+        # Parent prefix is service-auth passthrough.
+        assert c.get(f'http://127.0.0.1:{port}/open/anything').status_code == 200
+
+        # Child prefix is API-key protected and wins over the public parent.
+        assert c.get(f'http://127.0.0.1:{port}/open/private/item').status_code == 401
+        child=c.get(f'http://127.0.0.1:{port}/open/private/item',
+                    headers={'X-Gateway-Key':'valid-test-key'})
+        assert child.status_code == 200, child.text
+        assert child.json()['sg_route'] == 'open-private'
+        assert child.json()['sg_auth'] == 'api_key'
+
+        # The slashless boundary must not fall back to /open/ passthrough.
+        assert c.get(f'http://127.0.0.1:{port}/open/private').status_code == 401
+        slashless=c.get(f'http://127.0.0.1:{port}/open/private',
+                        headers={'X-Gateway-Key':'valid-test-key'})
+        assert slashless.status_code == 200, slashless.text
+        assert slashless.json()['path'] == '/open/private/'
+        assert slashless.json()['sg_route'] == 'open-private'
 
 
 def test_real_sse_delivered_before_upstream_finishes(real_edge):
