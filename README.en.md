@@ -49,7 +49,7 @@ Admins can create a new business schema from the UI or with `sgctl database-crea
 
 ## AI music / advanced business routing
 
-Business grants may define a service-specific source CIDR ceiling without widening the global policy. Remote routes support API key, mTLS, or certificate-or-API-key authentication (either valid credential is sufficient). Optional per-route upstream secrets attest that a request actually traversed the selected gateway route. Route drafts can be copied without copying secret values. See [AI music integration](docs/AI-MUSIC-INTEGRATION.md).
+Business grants may define a service-specific source CIDR ceiling without widening the global policy. Remote routes support API key, mTLS, or certificate-or-API-key authentication (either valid credential is sufficient). Optional per-route upstream secrets attest that a request actually traversed the selected gateway route. Route drafts can be copied; copied routes reset per-route upstream-secret mode to `none`, so a new route never silently inherits a secret requirement. See [AI music integration](docs/AI-MUSIC-INTEGRATION.md).
 
 
 ## WeChat Mini Program business users
@@ -59,4 +59,9 @@ ServiceGateway can manage business users separately per registered service. A `w
 
 ## Service-auth passthrough
 
-Remote HTTPS routes may use `service_auth` for an explicit path-prefix passthrough. ServiceGateway performs no user identity check for that prefix; the upstream service decides whether requests are anonymous or authenticated by its own Bearer token/cookie. TLS, service CIDR ceilings, rate/connection/body limits, approved upstreams, management-cookie stripping and trusted-header sanitation remain enforced. More-specific protected prefixes on the same hostname take precedence. See [service-auth passthrough](docs/SERVICE-AUTH-PASSTHROUGH.md).
+Remote HTTPS routes may use `service_auth` for an explicit path-prefix passthrough. ServiceGateway performs no user identity check for that prefix; the upstream service decides whether requests are anonymous or authenticated by its own Bearer token/cookie. TLS, service CIDR ceilings, rate/connection/body limits, approved upstreams, management-cookie stripping and trusted-header sanitation remain enforced. More-specific child routes always override broader parent routes. A slashless child boundary such as `/api/private` is internally normalized to `/api/private/` before auth, so it cannot fall back to a broader passthrough parent. See [service-auth passthrough](docs/SERVICE-AUTH-PASSTHROUGH.md).
+
+
+## Recent route-editor behavior
+
+When an existing mTLS route is copied and changed to API-key, WeChat-user, or service-auth passthrough, the UI clears the stale `client_ca` before save. The backend still rejects non-mTLS routes carrying `client_ca`. Copied routes also reset `upstream_auth.mode` to `none`; if the new route requires a route-origin secret, enable `route_secret` explicitly and provision a new secret for that route ID. Management HTML and static assets are returned with `no-store` so upgraded route options are not hidden by a stale browser cache.
