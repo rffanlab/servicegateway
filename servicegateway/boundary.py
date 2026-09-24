@@ -25,6 +25,15 @@ class Boundary:
             nonlocal status
             if message['type'] == 'http.response.start':
                 status = message['status']
+                if path in ('/', '/login') or path.startswith('/static/'):
+                    headers_out = [(k, v) for k, v in message.get('headers', [])
+                                   if k.lower() not in (b'cache-control', b'expires', b'pragma')]
+                    headers_out.extend([
+                        (b'cache-control', b'no-store, max-age=0'),
+                        (b'pragma', b'no-cache'),
+                        (b'expires', b'0'),
+                    ])
+                    message = {**message, 'headers': headers_out}
             await send(message)
 
         async def reject(code, message):
