@@ -71,3 +71,20 @@
 - [ ] 只有管理员在密码与 CSRF 校验后能下载加密 P12；初次登录仍需要原 mTLS 引导。
 - [ ] 用户修改自己的密码后所有设备会话失效，旧密码被拒绝，API Key 不变。
 - [ ] 服务表单可增减 unit，本机登记幂等，越权 Key 和未批准服务被拒绝。
+
+
+## 路由权限与业务用户追加
+
+- [ ] 后台新增/复制路由的“所属服务”只能从已登记服务下拉选择，不能手填陌生 service id。
+- [ ] `service_auth` 在远程 HTTPS 业务域名可用；不要求 Gateway API Key、mTLS 或微信 Token，但仍保留 CIDR、限流、连接数、body、timeout、upstream 白名单和管理凭据剥离。
+- [ ] `service_auth` 保留业务自己的 Authorization/Cookie，且客户端伪造的 `X-SG-User-ID`、OpenID、Gateway Key、内部 Secret 不会透传为可信身份。
+- [ ] 父路由 `/api/` 为 `service_auth`、子路由 `/api/private/` 为 `wechat_user` 时，`/api/private/profile` 必须微信鉴权。
+- [ ] 无尾斜杠请求 `/api/private` 不能回落到公开 `/api/`，而应内部归一后执行 `/api/private/` 的下级权限。
+- [ ] 更深层路由继续覆盖父级，例如 `/api/private/admin/` 可改为 API Key 或 mTLS，且不会继承父级微信权限。
+- [ ] 复制 mTLS 路由并改为 API Key、微信或业务透传后，保存请求不再携带旧 `client_ca`；直接 API 提交残留 `client_ca` 仍被 422 拒绝。
+- [ ] 复制带 `route_secret` 的路由后，新副本默认 `upstream_auth=none`，原路由保持不变，Secret 不复制。
+- [ ] 草稿显式启用 `route_secret` 但未配置 Secret 时，发布预览直接阻止发布并列出缺失 route id。
+- [ ] 微信登录成功后 Token 只属于当前服务；跨服务 Token、过期 Token、停用用户和角色不匹配均不能访问 `wechat_user` 路由。
+- [ ] 业务后端从可信头获取 user id/role/OpenID；loopback introspection 还要求正确 `user_service_ids` 专用 Key，其他 Key 作用域不能替代。
+- [ ] 微信 AppSecret 不出现在 MySQL、网页、路由快照、日志或 API 响应；微信 `session_key` 不保存、不下发。
+- [ ] 管理页面和 `/static/*` 返回 no-store；升级后刷新即可看到新路由鉴权选项，不继续使用旧缓存脚本。
