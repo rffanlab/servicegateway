@@ -49,6 +49,24 @@ def test_remote_service_auth_and_mixed_mtls_paths_are_allowed():
     assert "if ($ssl_client_verify != SUCCESS) { return 403; }" in config
 
 
+def test_nested_wechat_route_overrides_service_auth_parent():
+    policy = remote_policy()
+    parent = remote_route()
+    parent.update(id='api-parent', name='API Parent', path='/api/', auth='service_auth')
+    child = remote_route()
+    child.update(id='api-private', name='API Private', path='/api/private/', auth='wechat_user')
+    snap = Snapshot(services=[ServiceSpec(**SPEC)],
+                    routes=[RouteSpec(**parent), RouteSpec(**child)])
+    validate_snapshot(snap, policy, inspect_units=False)
+    config = render(snap, policy, snap.digest(), SECRET)
+    assert "location = /api/private {" in config
+    assert "rewrite ^ /api/private/ last;" in config
+    child_block = config.split("location ^~ /api/private/ {", 1)[1].split("\n    }", 1)[0]
+    parent_block = config.split("location ^~ /api/ {", 1)[1].split("\n    }", 1)[0]
+    assert "auth_request /_sg/auth/api-private;" in child_block
+    assert "auth_request" not in parent_block
+
+
 def test_remote_tls_key_route_allowed_and_metadata_forbidden():
     p=remote_policy()
     data=remote_route()

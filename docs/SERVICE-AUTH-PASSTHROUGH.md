@@ -62,6 +62,23 @@ X-SG-Auth: service_auth
 /api/internal/ -> api_key
 ```
 
+## 下级路由权限覆盖上级
+
+权限按**最长、最具体的 path 前缀**决定，不从上级路由继承。例如：
+
+```text
+/api/          -> service_auth
+/api/private/  -> wechat_user
+```
+
+则：
+
+- `/api/news`：走 `/api/`，业务自行鉴权；
+- `/api/private/profile`：走 `/api/private/`，必须微信登录；
+- `/api/private`：不会掉回 `/api/` 公开透传，网关会先在内部归一成 `/api/private/`，再执行下级微信鉴权。
+
+同理，下级可以使用 API Key、mTLS 或其他更严格/不同的模式。**只要存在更具体的下级路由，就完全按下级路由权限执行。**
+
 ## 同一域名混合受保护路径
 
 同一 host/443 可以同时存在公开透传和更具体的受保护路径。Nginx 使用最长前缀匹配，所以更具体的路由优先，例如：
