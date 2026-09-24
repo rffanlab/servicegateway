@@ -59,7 +59,20 @@ cd servicegateway && sudo bash deploy/install.sh
 
 Agent socket 固定 root:servicegateway 0750/0660，部署后以普通 Web 用户实际读取访问采样。CRL 自动维护不自动更换浏览器证书；它使用主机可解密的 root-only 凭据，不等于离线 CA。升级、一次授权、下载边界和本机登记示例见 [运维升级说明](docs/OPERATIONS-UPGRADE.md)。
 
-## 微信业务用户\n\n网关支持按服务隔离的微信小程序登录与业务用户管理。`wechat_user` 路由要求业务 Bearer Token，可选限制业务角色；Nginx 向上游注入可信 `X-SG-User-ID` / `X-SG-WeChat-OpenID`，并提供 loopback Token introspection。AppSecret 仅由 root Agent 使用，微信 `session_key` 不保存。详见 [微信业务用户](docs/WECHAT-BUSINESS-USERS.md)。\n\n## API 与状态\n
+## 业务自行鉴权 / 公开透传
+
+`service_auth` 用于把某个 HTTPS path 前缀完整交给业务服务决定匿名、自有 Bearer Token 或 Cookie 权限。网关不做用户身份校验，但继续执行 TLS、服务/路由 CIDR、速率/连接/body/timeout、已批准 upstream、管理凭据剥离和可信身份头清洗。更具体的下级路由永远优先，例如 `/api/` 透传、`/api/private/` 微信鉴权时，`/api/private`、`/api/private/` 及其子路径都按微信鉴权执行。详见 [业务公开透传](docs/SERVICE-AUTH-PASSTHROUGH.md)。
+
+## 微信业务用户
+
+网关支持按服务隔离的微信小程序登录与业务用户管理。`wechat_user` 路由要求业务 Bearer Token，可选限制业务角色；Nginx 向上游注入可信 `X-SG-User-ID` / `X-SG-WeChat-OpenID`，并提供 loopback Token introspection。AppSecret 仅由 root Agent 使用，微信 `session_key` 不保存。详见 [微信业务用户](docs/WECHAT-BUSINESS-USERS.md)。
+
+## 路由复制与鉴权字段
+
+路由可从已有草稿复制。复制会保留服务、域名、path、upstream、限流、证书等普通配置，但**不会继承每路由 Secret 要求**：新副本的 `upstream_auth` 默认重置为 `none`。若新 route 也需要 `X-SG-Upstream-Token`，必须显式重新选择 `route_secret` 并为新 route 单独生成 Secret。鉴权从 mTLS 切到 API Key、微信或业务透传时，后台会自动清空不再适用的 `client_ca`；后端仍拒绝脏配置。
+
+## API 与状态
+
 管理写操作需要会话和 CSRF；敏感操作超过 5 分钟重新验证密码。operator 可启停服务，admin 管理配置与用户。限定服务登记 Key 只能登记指定服务，不能控制启停。登录后 `/api/schema` 提供 OpenAPI JSON。
 
 `POST /api/registry/services` 登记服务；`PUT /api/routes/{id}?revision=N` 只保存草稿；`POST /api/gateway/preview` 后携相同 revision/digest 调用 `/api/gateway/publish`；`/api/gateway/rollback/{id}` 恢复成功快照，不覆盖编辑草稿或业务数据；`/api/gateway/reconcile` 核对未决发布，不盲目重试。
