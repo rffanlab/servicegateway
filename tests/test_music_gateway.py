@@ -49,6 +49,13 @@ def test_mtls_or_api_key_requires_certificate_ca_and_is_digest_sensitive():
     assert Snapshot(services=[ServiceSpec(**SPEC)], routes=[combined]).digest() != Snapshot(services=[ServiceSpec(**SPEC)], routes=[plain]).digest()
 
 
+def test_non_mtls_route_with_stale_client_ca_is_rejected_by_schema():
+    with pytest.raises(ValidationError):
+        RouteSpec(**route(auth='service_auth', client_ca='admin-ca'))
+    with pytest.raises(ValidationError):
+        RouteSpec(**route(auth='wechat_user', client_ca='admin-ca'))
+
+
 def test_internal_auth_allows_verified_certificate_or_scoped_api_key(signed):
     client, _, _ = signed
     register(client)
@@ -78,15 +85,28 @@ def test_route_clone_helper_keeps_service_and_config_but_changes_identity():
     module = (Path(__file__).parents[1] / 'servicegateway/static/route-tools.js').as_uri()
     script = r"""
 import assert from 'node:assert/strict';
-const {cloneRouteDraft}=await import(process.argv[1]);
-const routes=[{id:'music-api',name:'Music API',service_id:'music',auth:'mtls_or_api_key',upstream_auth:{mode:'route_secret'},upstreams:[{address:'127.0.0.1',port:18888}]},{id:'music-api-copy',name:'existing',service_id:'music'}];
+const {authUsesClientCa,cloneRouteDraft,normalizeRouteAuthFields}=await import(process.argv[1]);
+const routes=[{id:'music-api',name:'Music API',service_id:'music',auth:'mtls_or_api_key',client_ca:'admin-ca',session_users:['legacy'],business_roles:['vip'],upstream_auth:{mode:'route_secret'},upstreams:[{address:'127.0.0.1',port:18888}]},{id:'music-api-copy',name:'existing',service_id:'music'}];
 const clone=cloneRouteDraft(routes,'music-api');
 assert.equal(clone.id,'music-api-copy-2');
 assert.equal(clone.service_id,'music');
 assert.equal(clone.auth,'mtls_or_api_key');
+assert.equal(clone.client_ca,'admin-ca');
 assert.equal(clone.upstream_auth.mode,'route_secret');
 clone.upstreams[0].port=19999;
 assert.equal(routes[0].upstreams[0].port,18888);
+assert.equal(authUsesClientCa('mtls'),true);
+assert.equal(authUsesClientCa('mtls_or_api_key'),true);
+assert.equal(authUsesClientCa('service_auth'),false);
+clone.auth='service_auth';
+const publicClone=normalizeRouteAuthFields(clone);
+assert.equal(publicClone.client_ca,null);
+assert.deepEqual(publicClone.session_users,[]);
+assert.deepEqual(publicClone.business_roles,[]);
+assert.equal(clone.client_ca,'admin-ca');
+const wechat=normalizeRouteAuthFields({...clone,auth:'wechat_user',business_roles:['vip']});
+assert.equal(wechat.client_ca,null);
+assert.deepEqual(wechat.business_roles,['vip']);
 """
     result = subprocess.run(['node','--input-type=module','-e',script,module],capture_output=True,text=True,timeout=10)
     assert result.returncode == 0, result.stderr
