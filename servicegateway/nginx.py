@@ -132,7 +132,10 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                       f"      proxy_pass http://127.0.0.1:{admin_port}/internal/wechat/userinfo;"] + common + [
                       "      proxy_set_header Authorization $http_authorization;",
                       "    }"]
-        for r in sorted(routes, key=lambda x: x.path):
+        # Render more-specific paths first for readable previews. Nginx prefix
+        # selection is longest-match; the exact slashless normalizer below prevents
+        # /api/private from falling back to a broader /api/ route.
+        for r in sorted(routes, key=lambda x: (-len(x.path), x.path)):
             ident = r.id.replace('-', '_')
             if r.auth in ('session', 'api_key', 'mtls_or_api_key', 'mtls_api_key', 'wechat_user'):
                 lines += [f"    location = /_sg/auth/{r.id} {{", "      internal;",
@@ -149,6 +152,11 @@ def render(snapshot: Snapshot, policy: dict, digest: str, secret: str, admin_por
                           "      proxy_pass http://127.0.0.1:18090/api/auth/me;", "      proxy_pass_request_body off;",
                           "      proxy_set_header Content-Length '';", "      proxy_set_header Cookie $http_cookie;",
                           "      proxy_set_header X-Real-IP $remote_addr;", "    }"]
+            if r.path != '/':
+                bare = r.path[:-1]
+                lines += [f"    location = {bare} {{",
+                          f"      rewrite ^ {r.path} last;",
+                          "    }"]
             lines += [f"    location ^~ {r.path} {{", f"      set $sg_route '{r.id}';"]
             if r.auth in ('mtls', 'mtls_or_api_key', 'mtls_api_key'):
                 lines += [f"      if ($sg_origin_{ident} = 0) {{ return 403; }}",
