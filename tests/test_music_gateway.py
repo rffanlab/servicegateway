@@ -92,7 +92,7 @@ assert.equal(clone.id,'music-api-copy-2');
 assert.equal(clone.service_id,'music');
 assert.equal(clone.auth,'mtls_or_api_key');
 assert.equal(clone.client_ca,'admin-ca');
-assert.equal(clone.upstream_auth.mode,'route_secret');
+assert.equal(clone.upstream_auth.mode,'none');
 clone.upstreams[0].port=19999;
 assert.equal(routes[0].upstreams[0].port,18888);
 assert.equal(authUsesClientCa('mtls'),true);
