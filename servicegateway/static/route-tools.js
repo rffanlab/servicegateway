@@ -12,3 +12,15 @@ export function cloneRouteDraft(routes, sourceId) {
   copy.name = (source.name + ' 副本').slice(0, 100);
   return copy;
 }
+
+export function authUsesClientCa(auth) {
+  return ['mtls', 'mtls_or_api_key', 'mtls_api_key'].includes(auth);
+}
+
+export function normalizeRouteAuthFields(route) {
+  const out = JSON.parse(JSON.stringify(route));
+  if (!authUsesClientCa(out.auth)) out.client_ca = null;
+  if (out.auth !== 'wechat_user') out.business_roles = [];
+  if (out.auth !== 'session') out.session_users = [];
+  return out;
+}
