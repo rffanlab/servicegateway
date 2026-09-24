@@ -112,3 +112,40 @@ python3 deploy/register-local.py --manifest /实际路径/service-registration.j
 - systemd-creds：https://www.freedesktop.org/software/systemd/man/systemd-creds.html
 - OpenSSL CRL 签发：https://docs.openssl.org/3.0/man1/openssl-ca/
 - OWASP 账户认证与改密：https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+
+
+## 8. 最近路由与业务身份更新
+
+### 管理前端升级后仍显示旧选项
+
+管理页 `/`、`/login` 和 `/static/*` 现在统一返回 `Cache-Control: no-store, max-age=0`。升级切换 release 后重新打开或刷新后台即可加载当前 `app.js`，不再依赖硬刷新。若现场仍看不到“业务自行鉴权 / 公开透传”，先核对目标机 `git rev-parse HEAD` 与 `/srv/e5-apps/servicegateway/current` 是否已切到最新 release，再检查返回的 `/static/app.js`。
+
+### 路由复制
+
+复制路由会复用普通配置，但不复用每路由 Secret。新副本默认 `upstream_auth=none`。如果新 route 需要 route secret，再显式启用并执行：
+
+```bash
+sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route 实际路由ID --output /root/实际路由ID-gateway.env
+```
+
+发布预览若发现缺 Secret 会直接阻止发布。已经在旧版本中保存、仍带 `route_secret` 的副本不会被升级脚本擅自改写；需要在后台把“上游身份确认”改为 `none`，或者按上面的命令为该 route 单独配置 Secret。
+
+### 鉴权切换
+
+mTLS 路由复制或编辑后切换到 API Key、微信用户或业务透传时，后台会自动清空旧 `client_ca`。后端不会静默容忍残留字段，直接 API 提交“非 mTLS + client_ca”仍返回校验错误。
+
+### 路由层级
+
+同一 host 可以配置不同层级：
+
+```text
+/api/           -> service_auth
+/api/private/   -> wechat_user
+/api/admin/     -> mtls_or_api_key
+```
+
+权限始终按最具体下级路径执行。无尾斜杠边界（例如 `/api/private`）也会内部归一到下级路径后重新执行下级鉴权，不能回落到公开父路由。
+
+### 微信业务用户
+
+业务用户、微信身份、业务 Session 与网关管理员账号分离。AppSecret 只由 root Agent 使用；业务后端优先消费可信 `X-SG-User-*` / OpenID 头，需要主动解析 Token 时使用 loopback introspection，并携带具有对应 `user_service_ids` 作用域的专用 Key。
