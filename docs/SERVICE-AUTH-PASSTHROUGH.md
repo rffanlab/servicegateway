@@ -14,7 +14,7 @@ auth = service_auth
 
 则 `/api/open/` 下的所有接口都不做 ServiceGateway 身份校验：不要求网关 API Key、不要求客户端证书、不要求 ServiceGateway 微信业务 Token。请求直接到已批准的上游，由上游应用自己的规则决定是否匿名、是否检查自己的 Bearer Token/Cookie、以及具体业务权限。
 
-路径是前缀匹配，必须以 `/` 结尾。`/api/open/` 包含 `/api/open/a`、`/api/open/user/profile` 等，但不包含 `/api/open` 本身。
+路径是前缀匹配，配置值必须以 `/` 结尾。`/api/open/` 包含 `/api/open/a`、`/api/open/user/profile` 等。访问无尾斜杠的 `/api/open` 时，网关会在内部归一到 `/api/open/` 后重新选择路由并执行该路由权限，不会掉到更宽泛的父路由。
 
 ## 网关仍然执行的保护
 
@@ -102,3 +102,35 @@ X-SG-Auth: service_auth
 - 服务 root grant 的来源 CIDR 确实允许目标用户来源；互联网服务通常需要给该服务单独批准 `0.0.0.0/0`，不要修改全局 CIDR。
 
 发布预览中看到 `service_auth` 时，应把它视为明确的权限放宽：该前缀不再由网关身份层拦截。业务服务必须对本来需要保护的接口自行完成权限校验。
+
+
+## 复制路由与鉴权字段
+
+复制路由的目标是复用普通配置，不复用秘密或制造隐式权限。
+
+- 复制 mTLS 路由后，如果把鉴权改为 `service_auth`、`wechat_user` 或 `api_key`，后台会自动清空并禁用 `client_ca`；后端仍保持严格校验，非 mTLS 路由携带 `client_ca` 会返回 422。
+- 复制路由时 `upstream_auth.mode` 强制重置为 `none`。每路由 Secret 与 route id 绑定，不能复制。
+- 如果新副本也要求上游确认请求确实经过 ServiceGateway，需要手工选择 `route_secret`，然后为新 route id 单独运行 `sgctl route-secret`。
+- 发布预览如果发现启用了 `route_secret` 但缺少 Secret，会直接阻止发布，并列出缺失的 route id；不会再等到发布阶段才失败。
+
+### 复制路由示例
+
+原路由：
+
+```text
+id = ai-music
+auth = mtls_or_api_key
+client_ca = admin-ca
+upstream_auth = route_secret
+```
+
+复制为公开业务前缀并修改后，应形成：
+
+```text
+id = ai-music-copy
+auth = service_auth
+client_ca = null
+upstream_auth = none
+```
+
+只有当业务服务真的校验 `X-SG-Upstream-Token` 时，再给 `ai-music-copy` 单独启用和生成 route secret。
