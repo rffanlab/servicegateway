@@ -129,6 +129,8 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route ai
 - 原路由保持不变；
 - 如果 host/path 完全相同，保存时仍按冲突规则拒绝，要求调整；
 - `upstream_auth.mode` 在复制时重置为 `none`，因为 Secret 本身绝不能复制。若新 route 也需要上游身份确认，请手工重新选择 `route_secret`，然后为新 route 单独执行 `sgctl route-secret`。
+- 如果从 mTLS 路由复制后把边缘鉴权改成 `service_auth`、`wechat_user` 或 `api_key`，后台会自动清空旧 `client_ca`；直接 API 提交残留 `client_ca` 仍会被后端拒绝。
+- 发布预览发现某 route 启用了 `route_secret` 但还没有对应 Secret 时，会直接阻止发布并列出 route id；不需要 Secret 的公开路由应把“上游身份确认”设为 `none`。
 
 ## 音乐服务迁移顺序
 
@@ -162,3 +164,17 @@ sudo /srv/e5-apps/servicegateway/current/.venv/bin/sgctl route-secret --route ai
 - Secret 不出现在预览、访问采样、错误页或管理列表；
 - 路由复制不修改原路由、不复用 Secret；
 - 保存/预览/发布/回滚和 SSE/WebSocket/大文件行为继续通过现有回归。
+
+
+### 公开父路由 + 私有子路由
+
+AI 音乐服务可以在同一业务域名按 path 分层：
+
+```text
+/api/             -> service_auth
+/api/private/     -> wechat_user
+/api/internal/    -> api_key
+/api/admin/       -> mtls_or_api_key
+```
+
+更具体的下级路由优先。`/api/private`（无尾斜杠）也会归一到 `/api/private/` 后执行微信鉴权，不会回落到 `/api/` 透传。

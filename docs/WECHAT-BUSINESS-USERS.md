@@ -93,6 +93,23 @@ X-Gateway-Key: sg_...
 
 `service_auth` 会保留业务自己的 Authorization/Cookie，但不会注入微信用户身份；详见 [业务自行鉴权 / 公开透传](SERVICE-AUTH-PASSTHROUGH.md)。
 
+## 与上级公开路由的优先级
+
+微信鉴权可以作为公开父路由的更具体下级规则。例如：
+
+```text
+/api/          -> service_auth
+/api/private/  -> wechat_user
+/api/admin/    -> wechat_user + business_roles=["admin"]
+```
+
+规则是**最长、最具体的 path 优先**：
+
+- `/api/news` 走业务自行鉴权；
+- `/api/private/profile` 必须微信登录；
+- `/api/private` 即使没有尾斜杠，也会先内部归一到 `/api/private/`，再执行微信鉴权；
+- 不会因为父路由 `/api/` 更宽松就回落成公开访问。
+
 ## 安全边界
 
 - 头像服务 Token 不能访问音乐服务的微信路由，也不能跨服务 introspect。
@@ -112,3 +129,8 @@ X-Gateway-Key: sg_...
 6. 客户端保存业务 Token，并以 Bearer 方式访问业务 API。
 7. 后端优先使用可信 `X-SG-User-*`；需要主动解析 Token 时使用 loopback introspection + 专用查询 Key。
 8. 验证停用用户、吊销 Token、跨服务 Token、过期 Token 和角色不匹配全部失败。
+
+
+## 路由复制注意事项
+
+复制已有 mTLS 路由再改成 `wechat_user` 时，管理 UI 会自动清空旧的 `client_ca`；它不属于微信鉴权字段。复制路由也不会继承 `route_secret` 要求，新副本默认 `upstream_auth=none`。如果微信业务路由的上游还要校验 `X-SG-Upstream-Token`，需要显式启用并为新 route id 单独生成 Secret。

@@ -12,7 +12,7 @@
 |---|---|
 | 中文控制台 | 登录、服务状态、路由表单、发布与回滚、密钥、用户权限、审计、访问采样 |
 | 服务管理 | 原 manifest 字段兼容、幂等登记、导入预览、HTTP 健康、systemd 状态、启停/重启/自启、仅注销登记 |
-| 网关 | 独立 Nginx 实例；端口/精确域名/路径路由、前缀移除、加权多上游、最少连接、IP 绑定；路由可复制 |
+| 网关 | 独立 Nginx 实例；端口/精确域名/路径前缀、下级路由优先、前缀移除、加权多上游、最少连接、IP 绑定；路由可复制 |
 | 业务认证 | API Key、mTLS、API Key 或 mTLS 任一通过、微信业务用户 Token、业务自行鉴权/公开透传；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |
 | 协议 | HTTP、TLS、SSE、WebSocket、流式上传下载；业务流量不经过 Python 转发 |
 | 身份与防护 | Argon2、哈希会话与 API Key、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
@@ -59,7 +59,20 @@ cd servicegateway && sudo bash deploy/install.sh
 
 Agent socket 固定 root:servicegateway 0750/0660，部署后以普通 Web 用户实际读取访问采样。CRL 自动维护不自动更换浏览器证书；它使用主机可解密的 root-only 凭据，不等于离线 CA。升级、一次授权、下载边界和本机登记示例见 [运维升级说明](docs/OPERATIONS-UPGRADE.md)。
 
-## 微信业务用户\n\n网关支持按服务隔离的微信小程序登录与业务用户管理。`wechat_user` 路由要求业务 Bearer Token，可选限制业务角色；Nginx 向上游注入可信 `X-SG-User-ID` / `X-SG-WeChat-OpenID`，并提供 loopback Token introspection。AppSecret 仅由 root Agent 使用，微信 `session_key` 不保存。详见 [微信业务用户](docs/WECHAT-BUSINESS-USERS.md)。\n\n## API 与状态\n
+## 业务自行鉴权 / 公开透传
+
+`service_auth` 用于把某个 HTTPS path 前缀完整交给业务服务决定匿名、自有 Bearer Token 或 Cookie 权限。网关不做用户身份校验，但继续执行 TLS、服务/路由 CIDR、速率/连接/body/timeout、已批准 upstream、管理凭据剥离和可信身份头清洗。更具体的下级路由永远优先，例如 `/api/` 透传、`/api/private/` 微信鉴权时，`/api/private`、`/api/private/` 及其子路径都按微信鉴权执行。详见 [业务公开透传](docs/SERVICE-AUTH-PASSTHROUGH.md)。
+
+## 微信业务用户
+
+网关支持按服务隔离的微信小程序登录与业务用户管理。`wechat_user` 路由要求业务 Bearer Token，可选限制业务角色；Nginx 向上游注入可信 `X-SG-User-ID` / `X-SG-WeChat-OpenID`，并提供 loopback Token introspection。AppSecret 仅由 root Agent 使用，微信 `session_key` 不保存。详见 [微信业务用户](docs/WECHAT-BUSINESS-USERS.md)。
+
+## 路由复制与鉴权字段
+
+路由可从已有草稿复制。复制会保留服务、域名、path、upstream、限流、证书等普通配置，但**不会继承每路由 Secret 要求**：新副本的 `upstream_auth` 默认重置为 `none`。若新 route 也需要 `X-SG-Upstream-Token`，必须显式重新选择 `route_secret` 并为新 route 单独生成 Secret。鉴权从 mTLS 切到 API Key、微信或业务透传时，后台会自动清空不再适用的 `client_ca`；后端仍拒绝脏配置。
+
+## API 与状态
+
 管理写操作需要会话和 CSRF；敏感操作超过 5 分钟重新验证密码。operator 可启停服务，admin 管理配置与用户。限定服务登记 Key 只能登记指定服务，不能控制启停。登录后 `/api/schema` 提供 OpenAPI JSON。
 
 `POST /api/registry/services` 登记服务；`PUT /api/routes/{id}?revision=N` 只保存草稿；`POST /api/gateway/preview` 后携相同 revision/digest 调用 `/api/gateway/publish`；`/api/gateway/rollback/{id}` 恢复成功快照，不覆盖编辑草稿或业务数据；`/api/gateway/reconcile` 核对未决发布，不盲目重试。
