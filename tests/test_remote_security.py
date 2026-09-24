@@ -70,6 +70,17 @@ def test_host_origin_duplicate_headers_and_body_limit(signed):
     assert c.get('/api/overview',headers={'Cookie':'sg_session=one; sg_session=two'}).status_code==400
 
 
+def test_management_html_and_static_assets_are_not_cached(env):
+    c,_,_=env
+    page=c.get('/')
+    assert page.status_code==200
+    assert page.headers['cache-control']=='no-store, max-age=0'
+    script=c.get('/static/app.js')
+    assert script.status_code==200
+    assert script.headers['cache-control']=='no-store, max-age=0'
+    assert "业务自行鉴权 / 公开透传" in script.text
+
+
 def test_validation_does_not_echo_password(env):
     c,_,_=env
     secret='private-test-password-marker'*20
