@@ -20,6 +20,7 @@ from .db import ApiKey, Audit, BusinessSession, GatewayState, Health, LoginSessi
 from .ipc import AgentClient, AgentError
 from .schemas import ActionRequest, KeyRequest, PublishRequest, RouteSpec, ServiceSpec, Snapshot, Strict
 from .security import DUMMY_HASH, LoginLimiter, api_key, digest, ph, principal, verify
+from .api_key_crypto import ApiKeyCipherError, decrypt_token, encrypt_token
 
 log = logging.getLogger("servicegateway")
 
@@ -533,7 +534,21 @@ def create_app(settings=None, agent=None):
     def keys(request: Request):
         with sessions() as db:
             principal(request, db, "admin")
-            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "user_service_ids": k.user_service_ids or [], "expires_at": k.expires_at.isoformat() + "Z", "never_expires": k.expires_at.year == 9999, "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
+            auth_secret = settings.auth_secret()
+            rows = []
+            for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500)):
+                token = None
+                if k.token_ciphertext:
+                    try:
+                        token = decrypt_token(k.token_ciphertext, k.id, auth_secret)
+                    except ApiKeyCipherError:
+                        token = None
+                rows.append({"id": k.id, "name": k.name, "token": token, "token_recoverable": token is not None,
+                             "route_ids": k.route_ids, "service_ids": k.service_ids,
+                             "user_service_ids": k.user_service_ids or [],
+                             "expires_at": k.expires_at.isoformat() + "Z",
+                             "never_expires": k.expires_at.year == 9999, "revoked": k.revoked})
+            return rows
 
     @app.post("/api/keys")
     def create_key(body: KeyRequest, request: Request):
@@ -545,8 +560,11 @@ def create_app(settings=None, agent=None):
                 raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
             never_expires = body.never_expires or body.expires_days == 9999
             expires_at = datetime(9999, 12, 31, 23, 59, 59) if never_expires else now() + timedelta(days=body.expires_days)
-            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=expires_at))
-            audit(db, actor, "key.create", key_id, detail="never_expires=true" if never_expires else f"expires_days={body.expires_days}")
+            ciphertext = encrypt_token(token, key_id, settings.auth_secret())
+            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), token_ciphertext=ciphertext,
+                          route_ids=body.route_ids, service_ids=body.service_ids,
+                          user_service_ids=body.user_service_ids, expires_at=expires_at))
+            audit(db, actor, "key.create", key_id, detail="recoverable=true; never_expires=true" if never_expires else f"recoverable=true; expires_days={body.expires_days}")
         return {"id": key_id, "token": token, "never_expires": never_expires, "expires_at": expires_at.isoformat() + "Z", "notice": "密钥只显示本次；不会保存明文"}
 
     @app.delete("/api/keys/{key_id}")
