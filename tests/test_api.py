@@ -87,6 +87,57 @@ def test_api_key_scopes_hashing_and_immediate_revocation(signed):
     assert c.get('/internal/auth',headers=headers).status_code==401
 
 
+def test_key_scope_ids_must_exist_or_be_root_approved(signed):
+    c, _, _ = signed
+    # Root-approved service IDs are valid registration scopes even before MySQL registration.
+    result = c.post('/api/keys', json={'name':'pre-register','service_ids':['demo']})
+    assert result.status_code == 200, result.text
+    assert c.post('/api/keys', json={'name':'bad-register','service_ids':['not-approved']}).status_code == 422
+
+    register(c)
+    # User introspection scope requires an actually registered service.
+    assert c.post('/api/keys', json={'name':'user-scope','user_service_ids':['demo']}).status_code == 200
+    assert c.post('/api/keys', json={'name':'bad-user-scope','user_service_ids':['not-registered']}).status_code == 422
+
+    # Route scope requires an existing route draft.
+    assert c.post('/api/keys', json={'name':'missing-route','route_ids':['demo-route']}).status_code == 422
+    save_route(c, auth='api_key')
+    assert c.post('/api/keys', json={'name':'route-scope','route_ids':['demo-route']}).status_code == 200
+
+
+def test_key_scope_picker_exposes_route_and_service_ids():
+    from pathlib import Path
+    import subprocess
+    module = (Path(__file__).parents[1] / 'servicegateway/static/key-tools.js').as_uri()
+    script = r"""
+import assert from 'node:assert/strict';
+const {keyScopeData,collectKeyScopes}=await import(process.argv[1]);
+const overview={
+  assets:[{id:'music',name:'AI Music'}],
+  routes:[{id:'music-public',name:'Public API',service_id:'music',host:'music.example.test',path:'/api/',auth:'service_auth'}]
+};
+const inventory={grants:{music:{},avatar:{}}};
+const data=keyScopeData(overview,inventory);
+assert.deepEqual(data.routes.map(x=>x.id),['music-public']);
+assert.deepEqual(data.services.map(x=>x.id),['music']);
+assert.deepEqual(data.approved_services.map(x=>x.id),['avatar','music']);
+assert.equal(data.approved_services.find(x=>x.id==='avatar').name,'avatar');
+const fake={getAll(name){return {
+  route_ids:['music-public','music-public'],
+  service_ids:['avatar'],
+  user_service_ids:['music']
+}[name]??[];}};
+assert.deepEqual(collectKeyScopes(fake),{
+  route_ids:['music-public'],
+  service_ids:['avatar'],
+  user_service_ids:['music']
+});
+"""
+    result = subprocess.run(['node','--input-type=module','-e',script,module],
+                            capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
 def test_registry_key_is_not_a_lifecycle_admin(signed):
     c, _, _=signed
     key=c.post('/api/keys',json={'name':'deploy-demo','service_ids':['demo']}).json()['token']
