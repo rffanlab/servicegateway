@@ -67,7 +67,14 @@ async function load(){
     html=`<div class="section-head"><h2>发布历史</h2><div class="actions">${admin()?button('核对发布状态','reconcile')+button('预览并发布','preview','','primary'):''}</div></div><p class="hint">回滚只切换网关快照，不回滚业务数据，也不覆盖当前编辑草稿。这里显示最近 50 条记录。</p>`+(rows.length?table(['版本 / 时间','状态','说明','摘要','操作'],rows.map(r=>[`<code>${r.id.slice(0,8)}</code><small class="row-note">${esc(new Date(r.created_at).toLocaleString())}</small>`,badge(r.status,r.status==='active'?'good':r.status==='failed'?'bad':'warn'),`${esc(r.note)}<small class="row-note">${esc(r.error)}</small>`,`<code>${r.digest.slice(0,14)}</code>`,admin()&&['active','superseded'].includes(r.status)?button('回滚到此版','rollback',r.id):'—'])):empty('还没有发布记录','保存路由后，通过预览检查生成配置，再执行发布。')); window.sgReleases=rows;
   }else if(view==='keys'){
     const rows=await api('/api/keys');
-    html=`<div class="section-head"><h2>自动化与网关访问凭据</h2>${button('创建密钥','key-new','','primary')}</div><p class="hint">使用 X-Gateway-Key 请求头。路由作用域只能访问指定路由；登记作用域只能登记指定服务；业务用户查询作用域只允许本机 introspection 查询指定服务。三种作用域互不自动继承。密钥明文只返回一次。</p>`+(rows.length?table(['名称','路由作用域','登记作用域','业务用户查询','到期 / 状态','操作'],rows.map(k=>[esc(k.name),esc(k.route_ids.join(', ')),esc(k.service_ids.join(', ')),esc((k.user_service_ids??[]).join(', ')),`${k.never_expires?'永不过期':esc(new Date(k.expires_at).toLocaleDateString())} ${badge(k.revoked?'已撤销':'有效',k.revoked?'':'good')}`,k.revoked?'—':button('撤销','key-revoke',k.id,'danger')])):empty('暂无 API Key','不创建全局万能密钥，按路由或注册任务分配权限。'));
+    window.sgKeys=rows;
+    html=`<div class="section-head"><h2>自动化与网关访问凭据</h2>${button('创建密钥','key-new','','primary')}</div><p class="hint">使用 X-Gateway-Key 请求头。管理员可随时查看并复制完整 Key；数据库保存的是加密副本，鉴权仍使用不可逆哈希。旧版只保存哈希的 Key 无法恢复，需要重新创建一次。</p>`+(rows.length?table(['名称','密钥','路由作用域','登记作用域','业务用户查询','到期 / 状态','操作'],rows.map(k=>[
+      esc(k.name),
+      k.token_recoverable?`<code class="secret-code">${esc(k.token)}</code><div class="row-note">${button('复制','key-copy',k.id)}</div>`:'<span class="muted">旧密钥不可恢复，请重建</span>',
+      esc(k.route_ids.join(', ')),esc(k.service_ids.join(', ')),esc((k.user_service_ids??[]).join(', ')),
+      `${k.never_expires?'永不过期':esc(new Date(k.expires_at).toLocaleDateString())} ${badge(k.revoked?'已撤销':'有效',k.revoked?'':'good')}`,
+      k.revoked?'—':button('撤销','key-revoke',k.id,'danger')
+    ])):empty('暂无 API Key','按实际路由或服务作用域创建密钥。'));
   }else if(view==='users'){
     const rows=await api('/api/users');
     html=`<div class="section-head"><h2>账号与角色</h2>${button('新增用户','user-new','','primary')}</div><p class="hint">viewer：查看；operator：查看、启停与审计；admin：配置、发布、密钥和用户管理。</p>`+table(['用户名','角色','状态','操作'],rows.map(u=>[esc(u.username),badge(u.role),badge(u.enabled?'启用':'停用',u.enabled?'good':''),u.enabled&&u.username!==me.username?button('停用','user-disable',u.id,'danger'):'—']));
@@ -212,13 +219,20 @@ python3 deploy/register-local.py --manifest /实际路径/service-registration.j
       const selected=collectKeyScopes(f), neverExpires=f.has('never_expires');
       const result=await api('/api/keys','POST',{name:f.get('name'),expires_days:neverExpires?9999:Number(f.get('expires_days')),never_expires:neverExpires,...selected});
       $('#editor').close();
-      read('请立即保存；密钥仅显示一次',result.token+'\n\n请求头：X-Gateway-Key\n到期：'+(result.never_expires?'永不过期':new Date(result.expires_at).toLocaleString())+'\n关闭后无法再次查看。');
+      read('密钥已创建，可随时在列表复制',result.token+'\n\n请求头：X-Gateway-Key\n到期：'+(result.never_expires?'永不过期':new Date(result.expires_at).toLocaleString())+'\n\n此 Key 之后仍会显示在“API 密钥”列表中。');
       return false;
     });
     const keyForm=$('#editor-form'), never=keyForm.elements.namedItem('never_expires'), days=keyForm.elements.namedItem('expires_days');
     const syncExpiry=()=>{days.disabled=never.checked;days.closest('label')?.classList.toggle('disabled',never.checked);};
     never.addEventListener('change',syncExpiry);
     syncExpiry();
+    return;
+  }
+  if(action==='key-copy'){
+    const key=(window.sgKeys??[]).find(k=>k.id===id);
+    if(!key?.token)throw new Error('这个旧密钥没有可恢复的明文，请重新创建');
+    try{await navigator.clipboard.writeText(key.token);toast('密钥已复制到剪贴板');}
+    catch(_){read('复制密钥',key.token+'\n\n浏览器未允许自动写入剪贴板，请手动复制上面的完整 Key。');}
     return;
   }
   if(action==='key-revoke'){if(confirm('立即撤销此密钥？')){await api(`/api/keys/${id}`,'DELETE');await load();}return;}
