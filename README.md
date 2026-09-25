@@ -15,7 +15,7 @@
 | 网关 | 独立 Nginx 实例；端口/精确域名/路径前缀、下级路由优先、前缀移除、加权多上游、最少连接、IP 绑定；路由可复制 |
 | 业务认证 | API Key、mTLS、API Key 或 mTLS 任一通过、微信业务用户 Token、业务自行鉴权/公开透传；服务级来源 CIDR 上限；可选每路由上游 Secret 防止 loopback 绕过 |
 | 协议 | HTTP、TLS、SSE、WebSocket、流式上传下载；业务流量不经过 Python 转发 |
-| 身份与防护 | Argon2、哈希会话与 API Key、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
+| 身份与防护 | Argon2、哈希会话、API Key 哈希校验 + 加密可恢复副本、角色权限、CSRF、Host/Origin、闲置失效、敏感操作重验、IP/速率/连接限制 |
 | 发布 | 草稿版本与摘要检查、白名单复验、nginx -t、原子写入、独立发布 generation、落盘中断恢复、历史快照回滚 |
 | 运维 | MySQL + Alembic；非 root 控制台、受限本机 Agent、安装/回退脚本、日志轮转、CLI、CI 与测试 |
 
@@ -70,6 +70,12 @@ Agent socket 固定 root:servicegateway 0750/0660，部署后以普通 Web 用�
 ## 路由复制与鉴权字段
 
 路由可从已有草稿复制。复制会保留服务、域名、path、upstream、限流、证书等普通配置，但**不会继承每路由 Secret 要求**：新副本的 `upstream_auth` 默认重置为 `none`。若新 route 也需要 `X-SG-Upstream-Token`，必须显式重新选择 `route_secret` 并为新 route 单独生成 Secret。鉴权从 mTLS 切到 API Key、微信或业务透传时，后台会自动清空不再适用的 `client_ca`；后端仍拒绝脏配置。
+
+## API Key 管理
+
+管理员后台会显示完整 API Key，并提供一键复制。鉴权仍只使用不可逆 `token_hash`；为了支持后续复制，新建 Key 另外保存 AES-GCM 加密副本，不在 MySQL 裸存明文。旧版本只保存哈希的 Key 无法反推出原文，升级后会标记“旧密钥不可恢复，请重建”；新建一次后即可长期在后台查看、复制或撤销。
+
+有限期支持 1–365 天；勾选“永不过期”或 API 传 `expires_days=9999` 表示不自动过期。永不过期不影响管理员随时撤销。
 
 ## API 与状态
 
