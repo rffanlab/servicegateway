@@ -209,8 +209,8 @@ python3 deploy/register-local.py --manifest /实际路径/service-registration.j
       +scopeChecklist('user_service_ids','业务用户查询作用域',registeredServiceItems,'当前没有已登记服务。')
       +'<p class="hint full">至少选择一个作用域。路由访问、服务登记、业务用户查询三种权限彼此独立；同一个服务可以按需要分别勾选。界面直接显示 Route ID / Service ID，不再手填。</p>';
     edit('创建限定作用域密钥',fields,async f=>{
-      const selected=collectKeyScopes(f);
-      const result=await api('/api/keys','POST',{name:f.get('name'),expires_days:Number(f.get('expires_days')),never_expires:f.has('never_expires'),...selected});
+      const selected=collectKeyScopes(f), neverExpires=f.has('never_expires');
+      const result=await api('/api/keys','POST',{name:f.get('name'),expires_days:neverExpires?9999:Number(f.get('expires_days')),never_expires:neverExpires,...selected});
       $('#editor').close();
       read('请立即保存；密钥仅显示一次',result.token+'\n\n请求头：X-Gateway-Key\n到期：'+(result.never_expires?'永不过期':new Date(result.expires_at).toLocaleString())+'\n关闭后无法再次查看。');
       return false;
