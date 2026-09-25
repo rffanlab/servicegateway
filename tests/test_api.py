@@ -1,3 +1,4 @@
+import pytest
 from conftest import PASSWORD, SECRET, SPEC, publish, register, route, save_route
 from servicegateway.db import ApiKey, Audit, LoginSession, User
 from sqlalchemy import select
@@ -72,19 +73,49 @@ def test_publish_failure_preserves_active(signed):
     assert agent.digest == first['digest']
 
 
-def test_api_key_scopes_hashing_and_immediate_revocation(signed):
+def test_api_key_scopes_hashing_recovery_and_immediate_revocation(signed):
     c, app, _=signed
     register(c); save_route(c,auth='api_key'); active=publish(c)
     result=c.post('/api/keys',json={'name':'scoped','route_ids':['demo-route']})
     assert result.status_code==200,result.text
     key=result.json()
     with app.state.sessions() as db:
-        assert db.get(ApiKey,key['id']).token_hash != key['token']
+        row=db.get(ApiKey,key['id'])
+        assert row.token_hash != key['token']
+        assert row.token_ciphertext and row.token_ciphertext != key['token']
+        assert key['token'] not in row.token_ciphertext
     headers={'X-SG-Secret':SECRET,'X-SG-Route':'demo-route','X-SG-Digest':active['digest'],'X-Gateway-Key':key['token']}
     assert c.get('/internal/auth',headers=headers).status_code==204
-    assert key['token'] not in c.get('/api/keys').text
+    listed={row['id']:row for row in c.get('/api/keys').json()}
+    assert listed[key['id']]['token']==key['token']
+    assert listed[key['id']]['token_recoverable'] is True
     assert c.delete('/api/keys/'+key['id']).status_code==200
     assert c.get('/internal/auth',headers=headers).status_code==401
+
+
+def test_legacy_hash_only_api_key_is_marked_unrecoverable(signed):
+    c, app, _ = signed
+    from servicegateway.security import digest
+    from servicegateway.db import now
+    from datetime import timedelta
+    with app.state.sessions.begin() as db:
+        db.add(ApiKey(id='legacy-key', name='legacy', token_hash=digest('sg_legacy_only_token_1234567890'),
+                      token_ciphertext=None, route_ids=['future-route'], service_ids=[],
+                      user_service_ids=[], expires_at=now()+timedelta(days=30), revoked=False))
+    row=next(x for x in c.get('/api/keys').json() if x['id']=='legacy-key')
+    assert row['token'] is None
+    assert row['token_recoverable'] is False
+
+
+def test_api_key_ciphertext_is_bound_to_key_id():
+    from servicegateway.api_key_crypto import ApiKeyCipherError, decrypt_token, encrypt_token
+    secret='a'*64
+    token='sg_'+'x'*48
+    value=encrypt_token(token,'key-a',secret)
+    assert token not in value
+    assert decrypt_token(value,'key-a',secret)==token
+    with pytest.raises(ApiKeyCipherError):
+        decrypt_token(value,'key-b',secret)
 
 
 def test_key_scope_picker_exposes_route_and_service_ids():
