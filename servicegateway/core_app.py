@@ -537,32 +537,12 @@ def create_app(settings=None, agent=None):
 
     @app.post("/api/keys")
     def create_key(body: KeyRequest, request: Request):
-        if not body.route_ids and not body.service_ids and not body.user_service_ids:
-            raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
-        with sessions() as db:
-            actor = principal(request, db, "admin")[0].username
-        # Registration keys may intentionally target a root-approved service
-        # before it has been registered in MySQL, so validate service_ids
-        # against the Agent/root policy rather than the Service table.
-        if body.service_ids:
-            inventory = agent.call("inventory")
-            approved_services = set((inventory.get("grants") or {}).keys())
-            missing_approved = sorted(set(body.service_ids) - approved_services)
-            if missing_approved:
-                raise HTTPException(422, "未获本机批准的服务 ID: " + ", ".join(missing_approved))
         token = "sg_" + secrets.token_urlsafe(32)
         key_id = uuid.uuid4().hex
         with sessions.begin() as db:
-            if body.route_ids:
-                existing_routes = set(db.scalars(select(Route.id).where(Route.id.in_(body.route_ids))))
-                missing_routes = sorted(set(body.route_ids) - existing_routes)
-                if missing_routes:
-                    raise HTTPException(422, "不存在的路由 ID: " + ", ".join(missing_routes))
-            if body.user_service_ids:
-                existing_services = set(db.scalars(select(Service.id).where(Service.id.in_(body.user_service_ids))))
-                missing_services = sorted(set(body.user_service_ids) - existing_services)
-                if missing_services:
-                    raise HTTPException(422, "尚未登记的业务用户服务 ID: " + ", ".join(missing_services))
+            actor = principal(request, db, "admin")[0].username
+            if not body.route_ids and not body.service_ids and not body.user_service_ids:
+                raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
             db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=now() + timedelta(days=body.expires_days)))
             audit(db, actor, "key.create", key_id)
         return {"id": key_id, "token": token, "notice": "密钥只显示本次；不会保存明文"}
