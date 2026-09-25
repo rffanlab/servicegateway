@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from pathlib import Path
 import secrets
@@ -533,7 +533,7 @@ def create_app(settings=None, agent=None):
     def keys(request: Request):
         with sessions() as db:
             principal(request, db, "admin")
-            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "user_service_ids": k.user_service_ids or [], "expires_at": k.expires_at.isoformat() + "Z", "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
+            return [{"id": k.id, "name": k.name, "route_ids": k.route_ids, "service_ids": k.service_ids, "user_service_ids": k.user_service_ids or [], "expires_at": k.expires_at.isoformat() + "Z", "never_expires": k.expires_at.year == 9999, "revoked": k.revoked} for k in db.scalars(select(ApiKey).order_by(ApiKey.id).limit(500))]
 
     @app.post("/api/keys")
     def create_key(body: KeyRequest, request: Request):
@@ -543,9 +543,11 @@ def create_app(settings=None, agent=None):
             actor = principal(request, db, "admin")[0].username
             if not body.route_ids and not body.service_ids and not body.user_service_ids:
                 raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
-            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=now() + timedelta(days=body.expires_days)))
-            audit(db, actor, "key.create", key_id)
-        return {"id": key_id, "token": token, "notice": "密钥只显示本次；不会保存明文"}
+            never_expires = body.never_expires or body.expires_days == 9999
+            expires_at = datetime(9999, 12, 31, 23, 59, 59) if never_expires else now() + timedelta(days=body.expires_days)
+            db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=expires_at))
+            audit(db, actor, "key.create", key_id, detail="never_expires=true" if never_expires else f"expires_days={body.expires_days}")
+        return {"id": key_id, "token": token, "never_expires": never_expires, "expires_at": expires_at.isoformat() + "Z", "notice": "密钥只显示本次；不会保存明文"}
 
     @app.delete("/api/keys/{key_id}")
     def revoke_key(key_id: str, request: Request):

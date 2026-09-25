@@ -197,7 +197,15 @@ class KeyRequest(Strict):
     route_ids: list[str] = Field(default_factory=list, max_length=400)
     service_ids: list[str] = Field(default_factory=list, max_length=200)
     user_service_ids: list[str] = Field(default_factory=list, max_length=200)
-    expires_days: int = Field(90, ge=1, le=365)
+    # 9999 is kept as a compatibility sentinel for "never expires".
+    expires_days: int = Field(90, ge=1, le=9999)
+    never_expires: bool = False
+
+    @model_validator(mode="after")
+    def valid_expiry(self):
+        if not self.never_expires and self.expires_days != 9999 and self.expires_days > 365:
+            raise ValueError("expires_days must be 1..365, or 9999 for never expires")
+        return self
 
     @field_validator("route_ids", "service_ids", "user_service_ids")
     @classmethod
