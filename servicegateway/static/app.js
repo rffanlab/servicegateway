@@ -2,6 +2,7 @@ import {databaseUI} from './database-ui.js';
 import {serviceFromForm} from './service-form.js';
 import {authUsesClientCa, cloneRouteDraft, normalizeRouteAuthFields} from './route-tools.js';
 import {businessUserUI} from './business-users.js';
+import {collectKeyScopes, keyScopeData} from './key-tools.js';
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 let me = null, view = 'overview', overview = null, editorSave = null, toastTimer;
@@ -36,6 +37,10 @@ const table = (heads, rows) => `<div class="table-wrap"><table><thead><tr>${head
 function field(name, title, value='', type='text', opts){ const control = type==='textarea' ? `<textarea name="${name}" rows="${opts?.rows ?? 6}">${esc(value)}</textarea>` : type==='select' ? `<select name="${name}">${opts.map(([v,t])=>`<option value="${v}" ${v===String(value)?'selected':''}>${esc(t)}</option>`).join('')}</select>` : type==='checkbox' ? `<input name="${name}" type="checkbox" ${value?'checked':''}>` : `<input name="${name}" type="${type}" value="${esc(value)}" ${type==='password'?'autocomplete="new-password"':''}>`; return `<label class="${type==='textarea'?'full':''}">${esc(title)}${control}</label>`; }
 function edit(title, fields, save, label='保存'){ $('#editor-title').textContent=title; $('#editor-fields').innerHTML=fields; $('#save-editor').textContent=label; $('#save-editor').hidden=!save; $('#cancel-editor').textContent=save?'取消':'关闭'; editorSave=save; $('#editor').showModal(); }
 function read(title, text){ edit(title, `<pre class="readbox">${esc(text)}</pre>`, null); }
+function scopeChecklist(name,title,items,emptyText){
+  const rows=items.length?items.map(item=>`<label class="scope-option"><input type="checkbox" name="${name}" value="${esc(item.id)}"><span><strong>${esc(item.label)}</strong><code>${esc(item.id)}</code>${item.meta?`<small>${esc(item.meta)}</small>`:''}</span></label>`).join(''):`<p class="hint">${esc(emptyText)}</p>`;
+  return `<div class="full scope-box"><div class="scope-title">${esc(title)}</div><div class="scope-list">${rows}</div></div>`;
+}
 function serviceCards(assets){ return `<div class="cards">${assets.map(s=>`<article class="card"><div class="card-head"><h3>${esc(s.name)}</h3>${badge(s.state,s.state==='running'?'good':['failed','stopped'].includes(s.state)?'bad':'warn')}</div><p>${esc(s.description || '暂无描述')}</p><div class="toolbar">${badge(s.healthy===true?'HTTP 健康':s.healthy===false?'HTTP 异常':'HTTP 未确认',s.healthy===true?'good':s.healthy===false?'bad':'warn')}${badge('自启 '+s.startup)}${s.latency_ms!==null?badge(s.latency_ms+' ms'):''}</div><div class="meta">${s.services.map(esc).join('<br>')}</div><p>${esc(s.gpu)} · ${s.checked_at ? esc(new Date(s.checked_at).toLocaleTimeString()) : '等待采集'}<br>${esc(s.detail)}</p><div class="card-actions">${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">打开原入口 ↗</a>`:''}${operator()?button('启动','start',s.id)+button('停止','stop',s.id)+button('重启','restart',s.id)+button('启用自启','enable',s.id)+button('禁止自启','disable',s.id)+button('检查','check',s.id):''}${admin()?button('编辑','service-edit',s.id)+button('建业务库','database-new',s.id)+button('注销','service-delete',s.id,'danger'):''}</div></article>`).join('')}</div>`; }
 const databases = databaseUI({api, edit, field, table, badge, button, empty, esc, getOverview:()=>overview, getUser:()=>me, showLogin});
 const businessUsers = businessUserUI({api, edit, field, table, badge, button, empty, esc, getOverview:()=>overview});
@@ -192,7 +197,26 @@ python3 deploy/register-local.py --manifest /实际路径/service-registration.j
   if(action==='reconcile'){await api('/api/gateway/reconcile','POST');toast('状态核对完成');await load();return;}
   if(action==='rollback'){const r=window.sgReleases.find(x=>x.id===id);if(confirm(`将线上网关回滚到 ${r.id.slice(0,8)}？当前草稿不会被覆盖。`)){await api(`/api/gateway/rollback/${id}`,'POST',{revision:overview.revision,digest:r.digest,note:'从控制台回滚到 '+id});await load();}return;}
   if(action==='import'){const inv=await api('/api/inventory');edit('导入 E5 服务',`<p class="hint full">远程模式不自动信任旧 E5 登记。请粘贴导出的清单并在远程机重新批准实际 unit；不会执行旧源码、覆盖已有登记或自动创建路由。</p>`+field('items','服务清单数组 JSON',JSON.stringify(inv.manifests,null,2),'textarea',{rows:18}),async f=>{const services=JSON.parse(f.get('items'));const p=await api('/api/import/e5','POST',{services,apply:false});if(p.conflicts.length)throw new Error('存在冲突：'+p.conflicts.join(', '));if(!confirm(`新增 ${p.additions.length} 项，保持 ${p.unchanged.length} 项不变，确认导入？`))throw new Error('已取消导入');await api('/api/import/e5','POST',{services,apply:true,revision:p.revision});},'预览导入');return;}
-  if(action==='key-new'){edit('创建限定作用域密钥',field('name','名称')+field('expires_days','有效天数',90,'number')+field('route_ids','可访问的路由 ID（逗号分隔）')+field('service_ids','可登记的服务 ID（逗号分隔）')+field('user_service_ids','可查询业务用户的服务 ID（逗号分隔）'),async f=>{const split=k=>f.get(k).split(',').map(x=>x.trim()).filter(Boolean);const result=await api('/api/keys','POST',{name:f.get('name'),expires_days:Number(f.get('expires_days')),route_ids:split('route_ids'),service_ids:split('service_ids'),user_service_ids:split('user_service_ids')});$('#editor').close();read('请立即保存；密钥仅显示一次',result.token+'\n\n请求头：X-Gateway-Key\n关闭后无法再次查看。');return false;});return;}
+  if(action==='key-new'){
+    const inventory=await api('/api/inventory');
+    const scopes=keyScopeData(overview,inventory);
+    const routeItems=scopes.routes.map(r=>({id:r.id,label:r.name,meta:`${r.service_id} · ${r.host}${r.path} · ${r.auth}`}));
+    const approvedServiceItems=scopes.approved_services.map(s=>({id:s.id,label:s.name,meta:'已获 root 批准，可用于本机登记'}));
+    const registeredServiceItems=scopes.services.map(s=>({id:s.id,label:s.name,meta:'已登记服务，可用于业务用户查询'}));
+    const fields=field('name','名称')+field('expires_days','有效天数',90,'number')
+      +scopeChecklist('route_ids','路由访问作用域',routeItems,'当前没有路由。创建仅服务级 Key 时可以不选这里。')
+      +scopeChecklist('service_ids','服务登记作用域',approvedServiceItems,'当前没有已获 root 批准的服务。')
+      +scopeChecklist('user_service_ids','业务用户查询作用域',registeredServiceItems,'当前没有已登记服务。')
+      +'<p class="hint full">至少选择一个作用域。路由访问、服务登记、业务用户查询三种权限彼此独立；同一个服务可以按需要分别勾选。界面直接显示 Route ID / Service ID，不再手填。</p>';
+    edit('创建限定作用域密钥',fields,async f=>{
+      const selected=collectKeyScopes(f);
+      const result=await api('/api/keys','POST',{name:f.get('name'),expires_days:Number(f.get('expires_days')),...selected});
+      $('#editor').close();
+      read('请立即保存；密钥仅显示一次',result.token+'\n\n请求头：X-Gateway-Key\n关闭后无法再次查看。');
+      return false;
+    });
+    return;
+  }
   if(action==='key-revoke'){if(confirm('立即撤销此密钥？')){await api(`/api/keys/${id}`,'DELETE');await load();}return;}
   if(action==='user-new'){edit('新增用户',field('username','用户名')+field('password','密码（至少 12 位）','','password')+field('role','角色','viewer','select',[['viewer','只读'],['operator','运维'],['admin','管理员']]),async f=>{await api('/api/users','POST',Object.fromEntries(f.entries()));});return;}
   if(action==='user-disable'){if(confirm('停用此用户并立即吊销其会话？')){await api(`/api/users/${id}`,'DELETE');await load();}}

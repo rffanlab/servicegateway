@@ -87,6 +87,39 @@ def test_api_key_scopes_hashing_and_immediate_revocation(signed):
     assert c.get('/internal/auth',headers=headers).status_code==401
 
 
+def test_key_scope_picker_exposes_route_and_service_ids():
+    from pathlib import Path
+    import subprocess
+    module = (Path(__file__).parents[1] / 'servicegateway/static/key-tools.js').as_uri()
+    script = r"""
+import assert from 'node:assert/strict';
+const {keyScopeData,collectKeyScopes}=await import(process.argv[1]);
+const overview={
+  assets:[{id:'music',name:'AI Music'}],
+  routes:[{id:'music-public',name:'Public API',service_id:'music',host:'music.example.test',path:'/api/',auth:'service_auth'}]
+};
+const inventory={grants:{music:{},avatar:{}}};
+const data=keyScopeData(overview,inventory);
+assert.deepEqual(data.routes.map(x=>x.id),['music-public']);
+assert.deepEqual(data.services.map(x=>x.id),['music']);
+assert.deepEqual(data.approved_services.map(x=>x.id),['avatar','music']);
+assert.equal(data.approved_services.find(x=>x.id==='avatar').name,'avatar');
+const fake={getAll(name){return {
+  route_ids:['music-public','music-public'],
+  service_ids:['avatar'],
+  user_service_ids:['music']
+}[name]??[];}};
+assert.deepEqual(collectKeyScopes(fake),{
+  route_ids:['music-public'],
+  service_ids:['avatar'],
+  user_service_ids:['music']
+});
+"""
+    result = subprocess.run(['node','--input-type=module','-e',script,module],
+                            capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
 def test_registry_key_is_not_a_lifecycle_admin(signed):
     c, _, _=signed
     key=c.post('/api/keys',json={'name':'deploy-demo','service_ids':['demo']}).json()['token']
