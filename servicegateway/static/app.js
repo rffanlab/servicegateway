@@ -198,13 +198,15 @@ python3 deploy/register-local.py --manifest /实际路径/service-registration.j
   if(action==='rollback'){const r=window.sgReleases.find(x=>x.id===id);if(confirm(`将线上网关回滚到 ${r.id.slice(0,8)}？当前草稿不会被覆盖。`)){await api(`/api/gateway/rollback/${id}`,'POST',{revision:overview.revision,digest:r.digest,note:'从控制台回滚到 '+id});await load();}return;}
   if(action==='import'){const inv=await api('/api/inventory');edit('导入 E5 服务',`<p class="hint full">远程模式不自动信任旧 E5 登记。请粘贴导出的清单并在远程机重新批准实际 unit；不会执行旧源码、覆盖已有登记或自动创建路由。</p>`+field('items','服务清单数组 JSON',JSON.stringify(inv.manifests,null,2),'textarea',{rows:18}),async f=>{const services=JSON.parse(f.get('items'));const p=await api('/api/import/e5','POST',{services,apply:false});if(p.conflicts.length)throw new Error('存在冲突：'+p.conflicts.join(', '));if(!confirm(`新增 ${p.additions.length} 项，保持 ${p.unchanged.length} 项不变，确认导入？`))throw new Error('已取消导入');await api('/api/import/e5','POST',{services,apply:true,revision:p.revision});},'预览导入');return;}
   if(action==='key-new'){
-    const scopes=keyScopeData(overview);
+    const inventory=await api('/api/inventory');
+    const scopes=keyScopeData(overview,inventory);
     const routeItems=scopes.routes.map(r=>({id:r.id,label:r.name,meta:`${r.service_id} · ${r.host}${r.path} · ${r.auth}`}));
-    const serviceItems=scopes.services.map(s=>({id:s.id,label:s.name,meta:'服务 ID'}));
+    const approvedServiceItems=scopes.approved_services.map(s=>({id:s.id,label:s.name,meta:'已获 root 批准，可用于本机登记'}));
+    const registeredServiceItems=scopes.services.map(s=>({id:s.id,label:s.name,meta:'已登记服务，可用于业务用户查询'}));
     const fields=field('name','名称')+field('expires_days','有效天数',90,'number')
       +scopeChecklist('route_ids','路由访问作用域',routeItems,'当前没有路由。创建仅服务级 Key 时可以不选这里。')
-      +scopeChecklist('service_ids','服务登记作用域',serviceItems,'当前没有已登记服务。')
-      +scopeChecklist('user_service_ids','业务用户查询作用域',serviceItems,'当前没有已登记服务。')
+      +scopeChecklist('service_ids','服务登记作用域',approvedServiceItems,'当前没有已获 root 批准的服务。')
+      +scopeChecklist('user_service_ids','业务用户查询作用域',registeredServiceItems,'当前没有已登记服务。')
       +'<p class="hint full">至少选择一个作用域。路由访问、服务登记、业务用户查询三种权限彼此独立；同一个服务可以按需要分别勾选。界面直接显示 Route ID / Service ID，不再手填。</p>';
     edit('创建限定作用域密钥',fields,async f=>{
       const selected=collectKeyScopes(f);
