@@ -1,5 +1,10 @@
-export function keyScopeData(overview) {
+export function keyScopeData(overview, inventory={}) {
   const services=(overview?.assets??[]).map(s=>({id:s.id,name:s.name}));
+  const serviceNames=new Map(services.map(s=>[s.id,s.name]));
+  const approved_services=Object.keys(inventory?.grants??{}).sort().map(id=>({
+    id,
+    name:serviceNames.get(id)??id
+  }));
   const routes=(overview?.routes??[]).map(r=>({
     id:r.id,
     name:r.name,
@@ -8,7 +13,7 @@ export function keyScopeData(overview) {
     path:r.path,
     auth:r.auth
   }));
-  return {services,routes};
+  return {services,approved_services,routes};
 }
 
 export function collectKeyScopes(form) {
