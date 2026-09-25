@@ -120,6 +120,49 @@ assert.deepEqual(collectKeyScopes(fake),{
     assert result.returncode == 0, result.stderr
 
 
+def test_api_key_can_be_explicitly_non_expiring_and_9999_is_compatible(signed):
+    c, app, _ = signed
+    explicit = c.post('/api/keys', json={
+        'name':'never-expire-explicit',
+        'route_ids':['future-route-explicit'],
+        'expires_days':90,
+        'never_expires':True,
+    })
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()['never_expires'] is True
+    assert explicit.json()['expires_at'].startswith('9999-12-31T23:59:59')
+
+    compat = c.post('/api/keys', json={
+        'name':'never-expire-9999',
+        'route_ids':['future-route-9999'],
+        'expires_days':9999,
+    })
+    assert compat.status_code == 200, compat.text
+    assert compat.json()['never_expires'] is True
+
+    finite = c.post('/api/keys', json={
+        'name':'finite',
+        'route_ids':['future-route-finite'],
+        'expires_days':365,
+    })
+    assert finite.status_code == 200, finite.text
+    assert finite.json()['never_expires'] is False
+
+    assert c.post('/api/keys', json={
+        'name':'too-large',
+        'route_ids':['future-route-too-large'],
+        'expires_days':10000,
+    }).status_code == 422
+
+    rows = {row['name']:row for row in c.get('/api/keys').json()}
+    assert rows['never-expire-explicit']['never_expires'] is True
+    assert rows['never-expire-9999']['never_expires'] is True
+    assert rows['finite']['never_expires'] is False
+    with app.state.sessions() as db:
+        assert db.get(ApiKey, explicit.json()['id']).expires_at.year == 9999
+        assert db.get(ApiKey, compat.json()['id']).expires_at.year == 9999
+
+
 def test_registry_key_is_not_a_lifecycle_admin(signed):
     c, _, _=signed
     key=c.post('/api/keys',json={'name':'deploy-demo','service_ids':['demo']}).json()['token']
