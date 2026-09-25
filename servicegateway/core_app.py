@@ -543,6 +543,17 @@ def create_app(settings=None, agent=None):
             actor = principal(request, db, "admin")[0].username
             if not body.route_ids and not body.service_ids and not body.user_service_ids:
                 raise HTTPException(422, "至少指定一个路由、服务注册或业务用户查询作用域")
+            if body.route_ids:
+                existing_routes = set(db.scalars(select(Route.id).where(Route.id.in_(body.route_ids))))
+                missing_routes = sorted(set(body.route_ids) - existing_routes)
+                if missing_routes:
+                    raise HTTPException(422, "不存在的路由 ID: " + ", ".join(missing_routes))
+            requested_services = set(body.service_ids) | set(body.user_service_ids)
+            if requested_services:
+                existing_services = set(db.scalars(select(Service.id).where(Service.id.in_(requested_services))))
+                missing_services = sorted(requested_services - existing_services)
+                if missing_services:
+                    raise HTTPException(422, "不存在的服务 ID: " + ", ".join(missing_services))
             db.add(ApiKey(id=key_id, name=body.name, token_hash=digest(token), route_ids=body.route_ids, service_ids=body.service_ids, user_service_ids=body.user_service_ids, expires_at=now() + timedelta(days=body.expires_days)))
             audit(db, actor, "key.create", key_id)
         return {"id": key_id, "token": token, "notice": "密钥只显示本次；不会保存明文"}
