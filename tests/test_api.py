@@ -149,6 +149,11 @@ def test_api_key_can_be_explicitly_non_expiring_and_9999_is_compatible(signed):
     assert finite.json()['never_expires'] is False
 
     assert c.post('/api/keys', json={
+        'name':'too-long-finite',
+        'route_ids':['future-route-too-long'],
+        'expires_days':400,
+    }).status_code == 422
+    assert c.post('/api/keys', json={
         'name':'too-large',
         'route_ids':['future-route-too-large'],
         'expires_days':10000,
