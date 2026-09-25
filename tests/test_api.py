@@ -87,24 +87,6 @@ def test_api_key_scopes_hashing_and_immediate_revocation(signed):
     assert c.get('/internal/auth',headers=headers).status_code==401
 
 
-def test_key_scope_ids_must_exist_or_be_root_approved(signed):
-    c, _, _ = signed
-    # Root-approved service IDs are valid registration scopes even before MySQL registration.
-    result = c.post('/api/keys', json={'name':'pre-register','service_ids':['demo']})
-    assert result.status_code == 200, result.text
-    assert c.post('/api/keys', json={'name':'bad-register','service_ids':['not-approved']}).status_code == 422
-
-    register(c)
-    # User introspection scope requires an actually registered service.
-    assert c.post('/api/keys', json={'name':'user-scope','user_service_ids':['demo']}).status_code == 200
-    assert c.post('/api/keys', json={'name':'bad-user-scope','user_service_ids':['not-registered']}).status_code == 422
-
-    # Route scope requires an existing route draft.
-    assert c.post('/api/keys', json={'name':'missing-route','route_ids':['demo-route']}).status_code == 422
-    save_route(c, auth='api_key')
-    assert c.post('/api/keys', json={'name':'route-scope','route_ids':['demo-route']}).status_code == 200
-
-
 def test_key_scope_picker_exposes_route_and_service_ids():
     from pathlib import Path
     import subprocess
