@@ -65,3 +65,8 @@ Remote HTTPS routes may use `service_auth` for an explicit path-prefix passthrou
 ## Recent route-editor behavior
 
 When an existing mTLS route is copied and changed to API-key, WeChat-user, or service-auth passthrough, the UI clears the stale `client_ca` before save. The backend still rejects non-mTLS routes carrying `client_ca`. Copied routes also reset `upstream_auth.mode` to `none`; if the new route requires a route-origin secret, enable `route_secret` explicitly and provision a new secret for that route ID. Management HTML and static assets are returned with `no-store` so upgraded route options are not hidden by a stale browser cache.
+
+
+## Recoverable API keys
+
+Administrators can view and copy full API keys from the management console after creation. Authentication still uses the irreversible token hash; a separate AES-GCM encrypted copy is stored so the key can be recovered for display. Legacy hash-only keys cannot be reconstructed and must be recreated once. Finite keys remain limited to 1–365 days; `never_expires` (or the compatibility sentinel `expires_days=9999`) disables time-based expiry while preserving immediate revocation.

@@ -88,3 +88,13 @@
 - [ ] 业务后端从可信头获取 user id/role/OpenID；loopback introspection 还要求正确 `user_service_ids` 专用 Key，其他 Key 作用域不能替代。
 - [ ] 微信 AppSecret 不出现在 MySQL、网页、路由快照、日志或 API 响应；微信 `session_key` 不保存、不下发。
 - [ ] 管理页面和 `/static/*` 返回 no-store；升级后刷新即可看到新路由鉴权选项，不继续使用旧缓存脚本。
+
+
+## API Key 可恢复显示追加
+
+- [ ] API Key 新建后在管理员后台可再次查看完整明文，并可一键复制。
+- [ ] MySQL 中 `token_hash` 与 Key 明文不同；`token_ciphertext` 也不包含可直接搜索到的明文。
+- [ ] 用错误 key id 或错误 auth-secret 无法解密密文。
+- [ ] 旧版 hash-only Key 继续可以鉴权，但后台明确显示“不可恢复”，不会伪造一个替代值。
+- [ ] 撤销可恢复/永不过期 Key 后立即无法鉴权。
+- [ ] API 密钥列表与相关管理 API 返回 `Cache-Control: no-store`，访问采样与审计日志不记录 Key 明文。

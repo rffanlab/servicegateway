@@ -35,6 +35,7 @@ class ApiKey(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(80))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    token_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     route_ids: Mapped[list] = mapped_column(JSON)
     service_ids: Mapped[list] = mapped_column(JSON)
     user_service_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
